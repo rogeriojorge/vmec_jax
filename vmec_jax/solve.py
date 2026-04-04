@@ -9081,6 +9081,7 @@ def solve_fixed_boundary_residual_iter(
 
     timing_env = os.getenv("VMEC_JAX_TIMING", "").strip().lower()
     timing_enabled = timing_env not in ("", "0", "false", "no")
+    t_solve_wall_start = time.perf_counter() if timing_enabled else None
     timing_stats = {
         "compute_forces": 0.0,
         "preconditioner": 0.0,
@@ -12458,12 +12459,22 @@ def solve_fixed_boundary_residual_iter(
     }
     if timing_enabled:
         iters = max(int(timing_stats["iterations"]), 1)
+        accounted_s = float(
+            timing_stats["compute_forces"]
+            + timing_stats["preconditioner"]
+            + timing_stats["precond_refresh"]
+            + timing_stats["update"]
+        )
+        solve_wall_s = max(0.0, time.perf_counter() - float(t_solve_wall_start)) if t_solve_wall_start is not None else accounted_s
         timing_report = {
             "iterations": int(timing_stats["iterations"]),
             "compute_forces_s": float(timing_stats["compute_forces"]),
             "preconditioner_s": float(timing_stats["preconditioner"]),
             "precond_refresh_s": float(timing_stats["precond_refresh"]),
             "update_s": float(timing_stats["update"]),
+            "accounted_s": accounted_s,
+            "solve_wall_s": solve_wall_s,
+            "solve_overhead_s": max(0.0, solve_wall_s - accounted_s),
             "compute_forces_per_iter_s": float(timing_stats["compute_forces"]) / iters,
             "preconditioner_per_iter_s": float(timing_stats["preconditioner"]) / iters,
             "update_per_iter_s": float(timing_stats["update"]) / iters,
@@ -12477,6 +12488,8 @@ def solve_fixed_boundary_residual_iter(
                 f"precond={timing_report['preconditioner_s']:.3e}s "
                 f"precond_refresh={timing_report['precond_refresh_s']:.3e}s "
                 f"update={timing_report['update_s']:.3e}s "
+                f"wall={timing_report['solve_wall_s']:.3e}s "
+                f"overhead={timing_report['solve_overhead_s']:.3e}s "
                 f"(per-iter: {timing_report['compute_forces_per_iter_s']:.3e}, "
                 f"{timing_report['preconditioner_per_iter_s']:.3e}, "
                 f"{timing_report['update_per_iter_s']:.3e})",

@@ -918,6 +918,28 @@ Implementation map (performance-critical paths)
 Recent profiling snapshot (QA, 3 iterations on CPU)
 ---------------------------------------------------
 
+Timing breakdown diagnostics
+---------------------------
+
+Set ``VMEC_JAX_TIMING=1`` to print a per-solve timing summary for the
+fixed-boundary residual iterator. The report includes the existing iteration
+buckets
+
+- ``compute_forces``
+- ``preconditioner``
+- ``precond_refresh``
+- ``update``
+
+and also adds:
+
+- ``accounted_s``: sum of the timed iteration buckets,
+- ``solve_wall_s``: total wall time spent inside the residual iterator,
+- ``solve_overhead_s``: wall time not charged to the iteration buckets.
+
+This is useful when profiling parity-path CPU runs because it separates the
+steady-state kernel work from untimed overhead such as setup, controller logic,
+and other solver bookkeeping that still runs outside the per-iteration probes.
+
 - Default loop: ~0.26s total wall time (post-warmup).
 - Scan loop: ~0.083s total wall time (~3x faster for this short run).
 

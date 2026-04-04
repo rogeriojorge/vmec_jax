@@ -763,6 +763,19 @@ Legend:
   so treat it as a measurement artifact rather than a solver-path regression
   while the next profiling pass stays focused on fixed-boundary
   `compute_forces` / update costs.
+- Added solve-level timing attribution behind `VMEC_JAX_TIMING=1` so the
+  timing report now includes `accounted_s`, `solve_wall_s`, and
+  `solve_overhead_s`, plus a regression test in `tests/test_driver_api.py`
+  that checks the new diagnostics are present and sane.
+- Prototyped a batched host-side strict-update assembly fast path for the
+  default fixed-boundary CPU path and benchmarked it against a clean `d046593`
+  baseline on representative fresh-process runs.
+- The fast path preserved output parity on both representative cases:
+  numeric netCDF comparisons reported `WOUT_MATCH=1` with empty diff heads for
+  `input.nfp4_QH_warm_start` and `input.LandremanPaul2021_QA_lowres`.
+- Performance result was mixed, not broad-based: QH warm-start improved
+  modestly (`~12.03s` baseline vs `~11.61s` trial), while QA lowres stayed flat
+  (`~37.60s` baseline vs `~37.64s` trial), so the batching change was not kept.
 
 ### 2026-03-22
 - Reviewed the updated JAX QH draft PRs across `vmec_jax` and `simsopt` against the latest PR heads.

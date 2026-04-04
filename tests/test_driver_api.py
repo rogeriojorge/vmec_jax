@@ -229,6 +229,30 @@ def test_run_fixed_boundary_initial_guess():
     assert wout.ns == run.cfg.ns
 
 
+def test_run_fixed_boundary_reports_timing_breakdown(monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    input_path = root / "examples/data/input.circular_tokamak"
+    grid = vmec_angle_grid(ntheta=10, nzeta=1, nfp=1, lasym=False)
+
+    monkeypatch.setenv("VMEC_JAX_TIMING", "1")
+    run = run_fixed_boundary(
+        input_path,
+        max_iter=2,
+        verbose=False,
+        multigrid=False,
+        grid=grid,
+        jit_forces=False,
+        solver_mode="parity",
+    )
+
+    timing = run.result.diagnostics.get("timing")
+    assert timing is not None
+    assert float(timing["solve_wall_s"]) >= 0.0
+    assert float(timing["solve_overhead_s"]) >= 0.0
+    assert float(timing["accounted_s"]) >= 0.0
+    assert float(timing["solve_wall_s"]) + 1.0e-12 >= float(timing["accounted_s"])
+
+
 def test_run_fixed_boundary_returns_current_driven_flux_profiles():
     root = Path(__file__).resolve().parents[1]
     input_path = root / "examples/data/input.basic_non_stellsym_pressure"
