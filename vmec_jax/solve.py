@@ -32,8 +32,14 @@ from .grids import angle_steps
 from .state import VMECState, pack_state, unpack_state
 
 
-_SCAN_RUNNER_CACHE: dict[tuple, Any] = {}
 _COMPUTE_FORCES_CACHE: dict[tuple, Any] = {}
+
+
+def _run_scan_runner(scan_step, carry_init, it_seq):
+    return jax.lax.scan(scan_step, carry_init, it_seq)
+
+
+_RUN_SCAN_RUNNER = jit(_run_scan_runner, static_argnums=(0,))
 
 
 def _hash_array_bytes(a: Any) -> str:
@@ -4031,10 +4037,15 @@ def solve_fixed_boundary_residual_iter(
         auto_flip_force = False
     jit_forces = bool(jit_forces)
     use_scan = bool(use_scan)
-    # Default to chunked scan to reduce per-iteration host sync overhead.
-    # Respect explicit non-scan requests (e.g., parity comparators).
-    chunked_device_env = os.getenv("VMEC_JAX_VMEC2000_CHUNKED", "1").strip().lower()
-    force_chunked_scan = chunked_device_env not in ("", "0", "false", "no")
+    # Keep forced chunking on by default for accelerator backends, where the
+    # host chunk loop helps amortize callback/sync overhead. Quiet CPU runs
+    # are faster on the direct single-scan path unless the user explicitly
+    # opts into chunking.
+    chunked_device_env = os.getenv("VMEC_JAX_VMEC2000_CHUNKED", "").strip().lower()
+    if chunked_device_env:
+        force_chunked_scan = chunked_device_env not in ("", "0", "false", "no")
+    else:
+        force_chunked_scan = _scan_backend_name() != "cpu"
     if force_chunked_scan and (not use_scan):
         force_chunked_scan = False
     limit_dt_from_force = bool(limit_dt_from_force)
@@ -8090,46 +8101,6 @@ def solve_fixed_boundary_residual_iter(
             iter_offset0 = -1
             carry0 = carry0._replace(iter_offset=jnp.asarray(iter_offset0, dtype=jnp.int32))
 
-        scan_cache_key = (
-            "vmec2000_scan_v5",
-            static_key,
-            wout_key,
-            edge_key,
-            int(max_iter_tail),
-            int(preflight_iters),
-            int(iter_offset0),
-            float(step_size),
-            float(initial_flip_sign),
-            float(lambda_update_scale),
-            float(ftol),
-            int(nstep_screen),
-            bool(use_restart_triggers),
-            bool(vmecpp_restart),
-            None if stage_prev_fsq is None else float(stage_prev_fsq),
-            float(stage_transition_factor),
-            float(stage_transition_scale),
-            bool(jit_forces_scan),
-            bool(scan_light),
-            bool(scan_minimal),
-            int(scan_fallback_iters),
-            float(scan_fallback_accept_frac),
-            float(scan_fallback_fsq_factor),
-            int(scan_fallback_badjac_limit),
-            float(scan_fallback_fsq_abs),
-        )
-
-        def _run_scan(carry_init, it_seq):
-            return jax.lax.scan(_scan_step, carry_init, it_seq)
-
-        def _get_scan_runner(seq_len: int):
-            key = scan_cache_key + (int(seq_len),)
-            cached_run = _SCAN_RUNNER_CACHE.get(key)
-            if cached_run is None:
-                runner = jit(_run_scan)
-                _SCAN_RUNNER_CACHE[key] = runner
-                return runner
-            return cached_run
-
         def _emit_scan_prints(
             *,
             hist_np,
@@ -8255,8 +8226,7 @@ def solve_fixed_boundary_residual_iter(
                     break
                 chunk_len = min(int(chunk_size), int(remaining)) if chunk_cap_remaining else int(chunk_size)
                 it_seq = jnp.arange(start_idx, start_idx + int(chunk_len), dtype=jnp.int32)
-                runner = _get_scan_runner(int(chunk_len))
-                carry, hist_chunk = runner(carry, it_seq)
+                carry, hist_chunk = _RUN_SCAN_RUNNER(_scan_step, carry, it_seq)
                 fsq_min_global_j = jnp.minimum(
                     fsq_min_global_j,
                     jnp.min(hist_chunk[0] + hist_chunk[1] + hist_chunk[2]),
@@ -8305,7 +8275,6 @@ def solve_fixed_boundary_residual_iter(
             if abort_scan_host:
                 carry_final = carry_final._replace(abort_scan=jnp.asarray(True))
         else:
-            runner = _get_scan_runner(int(max_iter_tail) if int(max_iter_tail) > 0 else int(max_iter_scan))
             if preflight_iters > 0:
                 # Preflight the first iteration outside the jitted scan to avoid
                 # XLA aliasing issues in the initial tomnsps pass.
@@ -8327,7 +8296,7 @@ def solve_fixed_boundary_residual_iter(
                     it_seq = jnp.arange(preflight_iters, int(max_iter_scan), dtype=jnp.int32)
                     if axis_reset_repeat:
                         carry_pre = carry_pre._replace(iter_offset=jnp.asarray(iter_offset0, dtype=jnp.int32))
-                    carry_final, hist_tail = runner(carry_pre, it_seq)
+                    carry_final, hist_tail = _RUN_SCAN_RUNNER(_scan_step, carry_pre, it_seq)
                     hist = jax.tree_util.tree_map(
                         lambda a, b: jnp.concatenate([a[None], b], axis=0),
                         hist_pre,
@@ -8338,7 +8307,7 @@ def solve_fixed_boundary_residual_iter(
                     hist = jax.tree_util.tree_map(lambda a: a[None], hist_pre)
             else:
                 it_seq = jnp.arange(int(max_iter_scan), dtype=jnp.int32)
-                carry_final, hist = runner(carry_init, it_seq)
+                carry_final, hist = _RUN_SCAN_RUNNER(_scan_step, carry_init, it_seq)
         if scan_minimal:
             fsqr_hist, fsqz_hist, fsql_hist = hist
             accepted = None
@@ -8913,21 +8882,6 @@ def solve_fixed_boundary_residual_iter(
             include_edge_scan = False
             _compute_forces_scan = _compute_forces if jit_forces else _compute_forces_impl
 
-            scan_cache_key = (
-                "scan_v1",
-                static_key,
-                wout_key,
-                edge_key,
-                int(max_iter),
-                float(step_size),
-                float(initial_flip_sign),
-                float(lambda_update_scale),
-                float(precond_radial_alpha),
-                float(precond_lambda_alpha),
-                bool(apply_m1_constraints),
-                bool(jit_forces),
-            )
-
             def _scan_step(carry, it):
                 state, converged, converged_iter, last_fsqr, last_fsqz, last_fsql = carry
                 it = jnp.asarray(it, dtype=jnp.int32)
@@ -9068,25 +9022,15 @@ def solve_fixed_boundary_residual_iter(
 
                 return jax.lax.cond(converged, _hold_step, _advance_step, operand=None)
 
-            def _run_scan(state_init):
-                carry0 = (
-                    state_init,
-                    jnp.asarray(False),
-                    jnp.asarray(-1, dtype=jnp.int32),
-                    jnp.asarray(jnp.inf, dtype=dtype),
-                    jnp.asarray(jnp.inf, dtype=dtype),
-                    jnp.asarray(jnp.inf, dtype=dtype),
-                )
-                return jax.lax.scan(_scan_step, carry0, jnp.arange(max_iter, dtype=jnp.int32))
-
-            cached_run = _SCAN_RUNNER_CACHE.get(scan_cache_key)
-            if cached_run is None:
-                _run_scan = jit(_run_scan)
-                _SCAN_RUNNER_CACHE[scan_cache_key] = _run_scan
-            else:
-                _run_scan = cached_run
-
-            carry_final, hist = _run_scan(state)
+            carry0 = (
+                state,
+                jnp.asarray(False),
+                jnp.asarray(-1, dtype=jnp.int32),
+                jnp.asarray(jnp.inf, dtype=dtype),
+                jnp.asarray(jnp.inf, dtype=dtype),
+                jnp.asarray(jnp.inf, dtype=dtype),
+            )
+            carry_final, hist = _RUN_SCAN_RUNNER(_scan_step, carry0, jnp.arange(max_iter, dtype=jnp.int32))
             state_final, converged_final, converged_iter_final, _, _, _ = carry_final
             fsqr_hist, fsqz_hist, fsql_hist = hist
             w_hist = fsqr_hist + fsqz_hist + fsql_hist

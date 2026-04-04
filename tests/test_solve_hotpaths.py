@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import vmec_jax.solve as solve_mod
 
 from vmec_jax.config import load_config
 from vmec_jax.solve import (
@@ -62,6 +63,51 @@ def test_enforce_field_rows_matches_legacy_single_row():
     want = np.concatenate([arr[:-1, :], edge[None, :]], axis=0)
     want = np.concatenate([want[:1, :] * mask[None, :], want[1:, :]], axis=0)
     np.testing.assert_allclose(got, want)
+
+
+def test_scan_chunk_settings_cpu_quiet_uses_remaining_budget(monkeypatch):
+    monkeypatch.delenv("VMEC_JAX_SCAN_CHUNK_SIZE", raising=False)
+    monkeypatch.setattr(solve_mod, "_scan_backend_name", lambda: "cpu")
+
+    chunk_size, cap_to_remaining = solve_mod._scan_chunk_settings(
+        max_iter_scan=1500,
+        nstep_screen=200,
+        need_print=False,
+        lthreed=True,
+    )
+
+    assert chunk_size == 1500
+    assert cap_to_remaining is True
+
+
+def test_scan_chunk_settings_printing_keeps_nstep_screen(monkeypatch):
+    monkeypatch.delenv("VMEC_JAX_SCAN_CHUNK_SIZE", raising=False)
+    monkeypatch.setattr(solve_mod, "_scan_backend_name", lambda: "cpu")
+
+    chunk_size, cap_to_remaining = solve_mod._scan_chunk_settings(
+        max_iter_scan=1500,
+        nstep_screen=200,
+        need_print=True,
+        lthreed=True,
+    )
+
+    assert chunk_size == 200
+    assert cap_to_remaining is False
+
+
+def test_scan_chunk_settings_explicit_override_wins(monkeypatch):
+    monkeypatch.setenv("VMEC_JAX_SCAN_CHUNK_SIZE", "37")
+    monkeypatch.setattr(solve_mod, "_scan_backend_name", lambda: "cpu")
+
+    chunk_size, cap_to_remaining = solve_mod._scan_chunk_settings(
+        max_iter_scan=1500,
+        nstep_screen=200,
+        need_print=False,
+        lthreed=True,
+    )
+
+    assert chunk_size == 37
+    assert cap_to_remaining is True
 
 
 def test_enforce_fixed_boundary_and_axis_matches_component_reference():

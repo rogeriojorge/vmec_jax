@@ -70,12 +70,17 @@ Controls:
 - ``VMEC_JAX_DYNAMIC_SCAN_ITERS=<int>``: override the probe window
   (defaults to ``10`` on CPU, ``3`` on accelerators).
 
-For quiet accelerator scans, ``vmec-jax`` also increases the default scan chunk
-target and caps each chunk to the remaining iteration budget. This reduces
-host/device launch overhead without changing the in-scan hold semantics.
+For quiet CPU scans, ``vmec-jax`` now uses one remaining-iteration chunk by
+default, which preserves the direct single-scan behavior without paying Python
+chunk-loop overhead. Quiet accelerator scans still use larger default chunks
+and cap each chunk to the remaining iteration budget. This reduces host/device
+launch overhead without changing the in-scan hold semantics.
 
 Controls:
 
+- ``VMEC_JAX_VMEC2000_CHUNKED=1``: force chunked scan mode when scan is active.
+- ``VMEC_JAX_VMEC2000_CHUNKED=0``: force the direct single-scan path when scan
+  is active.
 - ``VMEC_JAX_SCAN_CHUNK_SIZE=<int>``: override the chunk target explicitly.
 
 Debug dump env vars are incompatible with scan mode.
@@ -519,19 +524,22 @@ because it adds extra compilation and iteration overhead.
 Scan chunking (fixed NSTEP blocks)
 ----------------------------------
 
-To avoid retracing for variable tail lengths, the scan loop executes in fixed
-chunks of length ``NSTEP`` (the VMEC input parameter). Iterations beyond
-``NITER`` are masked by the in-scan hold condition, so the extra work is a
-no-op and does not affect parity.
+To avoid retracing for variable tail lengths, the scan loop can execute in
+fixed chunks whose default depends on backend and verbosity. Quiet CPU runs use
+one full remaining-iteration chunk, which is equivalent to the direct
+single-scan path without the Python chunk loop. Quiet accelerator runs keep the
+chunked path with larger defaults, and printing runs still use ``NSTEP``-sized
+chunks. Iterations beyond ``NITER`` are masked by the in-scan hold condition,
+so the extra work is a no-op and does not affect parity.
 
 Controls:
 
-- ``VMEC_JAX_VMEC2000_CHUNKED=1`` (default): enable chunked scan.
-- ``VMEC_JAX_SCAN_CHUNK_SIZE=<int>``: override chunk length (defaults to
-  ``NSTEP``).
+- ``VMEC_JAX_VMEC2000_CHUNKED=1``: force chunked scan.
+- ``VMEC_JAX_VMEC2000_CHUNKED=0``: force the direct single-scan path.
+- ``VMEC_JAX_SCAN_CHUNK_SIZE=<int>``: override the chunk length explicitly.
 
-This reduces compilation cache misses when the stage transition changes
-``NITER`` but keeps the same ``NSTEP`` cadence.
+This keeps the accelerator-oriented chunking behavior where it helps while
+avoiding unnecessary host chunk orchestration on quiet CPU scans.
 
 Live NSTEP printing (debug callback)
 ------------------------------------

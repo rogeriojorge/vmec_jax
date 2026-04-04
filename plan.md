@@ -1,6 +1,6 @@
 # VMEC-JAX Master Plan and New-Agent Handoff (Living Document)
 
-Last updated: 2026-04-02
+Last updated: 2026-04-04
 Primary owner: `vmec_jax` contributors
 Canonical repo: `<repo-root>`
 
@@ -742,6 +742,27 @@ Legend:
 ---
 
 ## 13) Activity log (append-only)
+
+### 2026-04-04
+- Verified the backend-aware quiet-scan chunking policy now present in `solve.py`:
+  quiet CPU runs default to one remaining-iteration chunk while accelerators
+  still keep chunked execution unless overridden.
+- Simplified the scan runner wiring so scan mode reuses one shared jitted
+  `_run_scan_runner(...)` wrapper instead of building per-length cached local
+  scan closures, removing one source of cache-miss noise from the warm
+  fixed-boundary path.
+- Added targeted hot-path tests for the chunking policy in
+  `tests/test_solve_hotpaths.py` and updated `docs/performance.rst` so the
+  public docs match the current default behavior.
+- Reran representative fixed-boundary checks on the local CPU host:
+  fresh quiet CLI QH warm-start stayed in the same `~13-16s` band for default
+  and forced-chunked runs, fresh QA lowres stayed in the same `~42-43s` band,
+  and same-process QH warmed runs were about `4.29s` default versus `3.82s`
+  forced chunked.
+- The earlier `~120s` forced-chunked outlier did not reproduce on clean reruns,
+  so treat it as a measurement artifact rather than a solver-path regression
+  while the next profiling pass stays focused on fixed-boundary
+  `compute_forces` / update costs.
 
 ### 2026-03-22
 - Reviewed the updated JAX QH draft PRs across `vmec_jax` and `simsopt` against the latest PR heads.
