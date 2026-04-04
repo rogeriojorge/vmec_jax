@@ -1316,7 +1316,6 @@ def run_fixed_boundary(
             base_diag["cli_fixed_boundary_finish_modes"] = np.asarray([], dtype=object)
             base_diag["cli_fixed_boundary_full_parity_fallback"] = False
             return replace(run_in, result=replace(run_in.result, diagnostics=base_diag))
-
         base_total_budget = max(1, int(max_iter))
 
         best_run = run_in
@@ -1376,7 +1375,7 @@ def run_fixed_boundary(
             mode_i_l = str(mode_i).strip().lower()
             scan_minimal_default_i = True if (bool(performance_mode_i) and (not bool(verbose))) else None
             host_update_assembly_i = (
-                bool(performance_mode_i)
+                (bool(performance_mode_i) or (mode_i_l == "parity"))
                 and (not bool(static_i.cfg.lasym))
                 and (_default_backend_name() == "cpu")
             )
@@ -1498,7 +1497,7 @@ def run_fixed_boundary(
                 trial = _run_finish_attempt(
                     budget_i=budget_i,
                     mode_i="parity",
-                    use_scan_i=False,
+                    use_scan_i=True,
                     performance_mode_i=False,
                 )
                 trial_fsq = float(_result_final_fsq(trial.result))

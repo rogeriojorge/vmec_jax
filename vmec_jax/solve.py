@@ -5401,7 +5401,11 @@ def solve_fixed_boundary_residual_iter(
                 _compute_forces.lower(
                     state0,
                     include_edge=include_edge_flag,
+                    include_edge_residual=bool(include_edge_flag),
                     zero_m1=zero_m1_pre,
+                    freeb_bsqvac_half=None,
+                    constraint_rcon0=None,
+                    constraint_zcon0=None,
                     constraint_precond_diag=zero_precond_diag,
                     constraint_tcon=zero_tcon,
                     constraint_precond_active=constraint_active_false,
@@ -5446,6 +5450,7 @@ def solve_fixed_boundary_residual_iter(
         iter_idx: int | None = None,
         iter2: int | None = None,
     ):
+        include_edge_residual = bool(include_edge if include_edge_residual is None else include_edge_residual)
         if warmup_iters > 0 and (iter2 is not None) and (int(iter2) <= warmup_iters):
             if has_jax():
                 import jax
@@ -5483,6 +5488,7 @@ def solve_fixed_boundary_residual_iter(
             state,
             include_edge=include_edge,
             include_edge_residual=include_edge_residual,
+            freeb_bsqvac_half=freeb_bsqvac_half,
             zero_m1=zero_m1,
             constraint_rcon0=constraint_rcon0,
             constraint_zcon0=constraint_zcon0,
@@ -5491,11 +5497,6 @@ def solve_fixed_boundary_residual_iter(
             constraint_precond_active=constraint_precond_active,
             constraint_tcon_active=constraint_tcon_active,
             iter_idx=iter_idx,
-            **(
-                {"freeb_bsqvac_half": freeb_bsqvac_half}
-                if freeb_bsqvac_half is not None
-                else {}
-            ),
         )
 
     def _fsq_from_norms(norms_in, *, gcr2_in, gcz2_in, gcl2_in):
@@ -6258,7 +6259,11 @@ def solve_fixed_boundary_residual_iter(
                 k0, frzl0, gcr2_0, gcz2_0, gcl2_0, rz_scale0, l_scale0, norms0 = _compute_forces_scan(
                     state_init,
                     include_edge=False,
+                    include_edge_residual=False,
                     zero_m1=jnp.asarray(1.0, dtype=dtype),
+                    freeb_bsqvac_half=None,
+                    constraint_rcon0=None,
+                    constraint_zcon0=None,
                     constraint_precond_diag=zero_precond_diag,
                     constraint_tcon=zero_tcon,
                     constraint_precond_active=constraint_active_false,
@@ -6360,7 +6365,11 @@ def solve_fixed_boundary_residual_iter(
             k0, frzl0, gcr2_0, gcz2_0, gcl2_0, rz_scale0, l_scale0, norms0 = _compute_forces_scan(
                 state_init,
                 include_edge=False,
+                include_edge_residual=False,
                 zero_m1=jnp.asarray(1.0, dtype=dtype),
+                freeb_bsqvac_half=None,
+                constraint_rcon0=None,
+                constraint_zcon0=None,
                 constraint_precond_diag=zero_precond_diag,
                 constraint_tcon=zero_tcon,
                 constraint_precond_active=constraint_active_false,
@@ -6544,7 +6553,11 @@ def solve_fixed_boundary_residual_iter(
                     k, frzl, gcr2, gcz2, gcl2, rz_scale, l_scale, norms_current = _compute_forces_scan(
                         carry_adv.state,
                         include_edge=False,
+                        include_edge_residual=False,
                         zero_m1=zero_m1,
+                        freeb_bsqvac_half=None,
+                        constraint_rcon0=None,
+                        constraint_zcon0=None,
                         constraint_precond_diag=constraint_precond_diag,
                         constraint_tcon=constraint_tcon_override,
                         constraint_precond_active=constraint_precond_active,
@@ -7314,7 +7327,11 @@ def solve_fixed_boundary_residual_iter(
                         k_r, frzl_r, gcr2_r, gcz2_r, gcl2_r, rz_scale_r, l_scale_r, norms_current_r = _compute_forces_scan(
                             state_post,
                             include_edge=False,
+                            include_edge_residual=False,
                             zero_m1=zero_m1,
+                            freeb_bsqvac_half=None,
+                            constraint_rcon0=None,
+                            constraint_zcon0=None,
                             constraint_precond_diag=zero_precond_diag,
                             constraint_tcon=zero_tcon,
                             constraint_precond_active=constraint_active_false,
@@ -8926,7 +8943,11 @@ def solve_fixed_boundary_residual_iter(
                     _k, frzl, fsqr, fsqz, fsql, rz_scale, l_scale, _norms = _compute_forces_scan(
                         state,
                         include_edge=include_edge_scan,
+                        include_edge_residual=bool(include_edge_scan),
                         zero_m1=zero_m1,
+                        freeb_bsqvac_half=None,
+                        constraint_rcon0=None,
+                        constraint_zcon0=None,
                         iter_idx=None,
                     )
                     frss_in = (frzl.frss if frzl.frss is not None else jnp.zeros_like(frzl.frcc)) * rz_scale[:, None, None]

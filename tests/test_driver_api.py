@@ -623,7 +623,7 @@ def test_run_fixed_boundary_cli_budgeted_multigrid_path(monkeypatch, tmp_path):
 
     assert [call["ns"] for call in calls] == [5, 9, 13, 13]
     assert [call["max_iter"] for call in calls] == [27, 18, 100, 100]
-    assert [call["use_scan"] for call in calls] == [True, True, False, False]
+    assert [call["use_scan"] for call in calls] == [True, True, False, True]
     diag = run.result.diagnostics
     assert diag["cli_fixed_boundary_mode"] is True
     assert diag["cli_accelerated_fixed_policy"] == "budgeted_multigrid"
