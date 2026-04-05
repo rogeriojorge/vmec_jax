@@ -14,6 +14,7 @@ from functools import partial
 from ._compat import jax, jnp, jit, has_jax
 from .vmec_tomnsp import TomnspsRZL
 
+
 _LAMBDA_PRECOND_JIT_CACHE: dict[tuple, Any] = {}
 
 

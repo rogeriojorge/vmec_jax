@@ -55,6 +55,11 @@ def test_wout_roundtrip_read_write_read(tmp_path: Path, wout_rel: str):
         "phipf",
         "chipf",
         "phips",
+        "q_factor",
+        "chi",
+        "mass",
+        "beta_vol",
+        "over_r",
         "gmnc",
         "gmns",
         "bsupumnc",
@@ -65,17 +70,59 @@ def test_wout_roundtrip_read_write_read(tmp_path: Path, wout_rel: str):
         "bsubumns",
         "bsubvmnc",
         "bsubvmns",
+        "currumnc",
+        "currvmnc",
         "bmnc",
         "bmns",
         "vp",
         "pres",
         "presf",
         "fsqt",
+        "wdot",
+        "am",
+        "ai",
+        "am_aux_s",
+        "am_aux_f",
+        "ac_aux_s",
+        "ac_aux_f",
+        "ai_aux_s",
+        "ai_aux_f",
     ]:
         a = np.asarray(getattr(w0, name))
         b = np.asarray(getattr(w1, name))
         assert a.shape == b.shape
         assert np.allclose(a, b, rtol=0.0, atol=0.0)
 
-    for name in ["wb", "volume_p", "gamma", "wp", "fsqr", "fsqz", "fsql"]:
+    for name in [
+        "wb",
+        "volume_p",
+        "version_",
+        "gamma",
+        "wp",
+        "fsqr",
+        "fsqz",
+        "fsql",
+        "ftolv",
+        "aspect",
+        "betatotal",
+        "betapol",
+        "betator",
+        "betaxis",
+        "rmax_surf",
+        "rmin_surf",
+        "zmax_surf",
+        "rbtor0",
+        "rbtor",
+        "IonLarmor",
+        "volavgB",
+    ]:
         assert float(getattr(w0, name)) == float(getattr(w1, name))
+
+    for name in ["niter", "itfsq", "ier_flag"]:
+        assert int(getattr(w0, name)) == int(getattr(w1, name))
+
+    for name in ["lrecon", "lfreeb", "lrfp"]:
+        assert bool(getattr(w0, name)) is bool(getattr(w1, name))
+
+    for name in ["input_extension", "mgrid_file", "pmass_type", "pcurr_type", "piota_type"]:
+        assert str(getattr(w0, name)) == str(getattr(w1, name))

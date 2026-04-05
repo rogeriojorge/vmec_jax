@@ -27,13 +27,24 @@ def test_write_wout_is_vmecplot2_compatible(tmp_path: Path) -> None:
     f = netcdf.netcdf_file(out, "r", mmap=False)
     try:
         required = [
+            "version_",
+            "input_extension",
+            "mgrid_file",
+            "pmass_type",
             "phi",
             "iotaf",
+            "q_factor",
             "presf",
+            "chi",
             "iotas",
+            "mass",
             "pres",
+            "beta_vol",
             "ns",
             "nfp",
+            "niter",
+            "itfsq",
+            "ftolv",
             "xn",
             "xm",
             "xn_nyq",
@@ -41,6 +52,8 @@ def test_write_wout_is_vmecplot2_compatible(tmp_path: Path) -> None:
             "rmnc",
             "zmns",
             "bmnc",
+            "currumnc",
+            "currvmnc",
             "raxis_cc",
             "zaxis_cs",
             "buco",
@@ -58,8 +71,13 @@ def test_write_wout_is_vmecplot2_compatible(tmp_path: Path) -> None:
             "betapol",
             "betator",
             "betaxis",
+            "rbtor0",
+            "rbtor",
+            "IonLarmor",
+            "volavgB",
             "ctor",
             "DMerc",
+            "wdot",
         ]
         for name in required:
             assert name in f.variables

@@ -119,6 +119,8 @@ def test_wout_parity_against_reference(case, tmp_path):
         rtol=5e-4,
         atol=1e-6,
     )
+    _assert_allclose("currumnc[2:]", _trim_radial(wnew.currumnc, skip=2), _trim_radial(wref.currumnc, skip=2), rtol=2e-3, atol=5e-3)
+    _assert_allclose("currvmnc[2:]", _trim_radial(wnew.currvmnc, skip=2), _trim_radial(wref.currvmnc, skip=2), rtol=2e-3, atol=5e-3)
     _assert_allclose("bmnc", wnew.bmnc, wref.bmnc, rtol=1e-4, atol=2e-5)
     _assert_allclose("bmns", wnew.bmns, wref.bmns, rtol=1e-4, atol=2e-5)
 
@@ -127,10 +129,15 @@ def test_wout_parity_against_reference(case, tmp_path):
     _assert_allclose("chipf", wnew.chipf, wref.chipf, rtol=1e-8, atol=1e-12)
     _assert_allclose("phips", wnew.phips, wref.phips, rtol=1e-8, atol=1e-12)
     _assert_allclose("phi", wnew.phi, wref.phi, rtol=1e-8, atol=1e-12)
+    _assert_allclose("chi", wnew.chi, wref.chi, rtol=1e-8, atol=1e-12)
     _assert_allclose("iotas", wnew.iotas, wref.iotas, rtol=1e-8, atol=1e-12)
     _assert_allclose("iotaf", wnew.iotaf, wref.iotaf, rtol=1e-8, atol=1e-12)
+    _assert_allclose("q_factor", wnew.q_factor, wref.q_factor, rtol=1e-8, atol=1e-12)
+    _assert_allclose("mass", wnew.mass, wref.mass, rtol=1e-8, atol=1e-12)
     _assert_allclose("pres", wnew.pres, wref.pres, rtol=1e-8, atol=1e-12)
     _assert_allclose("presf", wnew.presf, wref.presf, rtol=1e-8, atol=1e-12)
+    _assert_allclose("beta_vol", wnew.beta_vol, wref.beta_vol, rtol=1e-6, atol=1e-10)
+    _assert_allclose("over_r", wnew.over_r, wref.over_r, rtol=1e-6, atol=1e-10)
 
     # Scalar diagnostics.
     _assert_allclose("wb", wnew.wb, wref.wb, rtol=1e-8, atol=1e-12)
@@ -140,6 +147,16 @@ def test_wout_parity_against_reference(case, tmp_path):
     _assert_allclose("bvco", wnew.bvco, wref.bvco, rtol=1e-6, atol=1e-10)
     _assert_allclose("jcuru", wnew.jcuru, wref.jcuru, rtol=1e-4, atol=1e-4)
     _assert_allclose("jcurv", wnew.jcurv, wref.jcurv, rtol=1e-4, atol=1e-4)
+    _assert_allclose("rmax_surf", wnew.rmax_surf, wref.rmax_surf, rtol=1e-8, atol=1e-12)
+    _assert_allclose("rmin_surf", wnew.rmin_surf, wref.rmin_surf, rtol=1e-8, atol=1e-12)
+    _assert_allclose("zmax_surf", wnew.zmax_surf, wref.zmax_surf, rtol=1e-8, atol=1e-12)
+    _assert_allclose("rbtor0", wnew.rbtor0, wref.rbtor0, rtol=1e-8, atol=1e-12)
+    _assert_allclose("rbtor", wnew.rbtor, wref.rbtor, rtol=1e-8, atol=1e-12)
+    _assert_allclose("IonLarmor", wnew.IonLarmor, wref.IonLarmor, rtol=1e-6, atol=1e-10)
+    _assert_allclose("volavgB", wnew.volavgB, wref.volavgB, rtol=1e-6, atol=1e-10)
+    assert wnew.input_extension == wref.input_extension
+    assert wnew.mgrid_file == wref.mgrid_file
+    assert wnew.pmass_type == wref.pmass_type
     assert np.isfinite(wnew.fsqr)
     assert np.isfinite(wnew.fsqz)
     assert np.isfinite(wnew.fsql)
