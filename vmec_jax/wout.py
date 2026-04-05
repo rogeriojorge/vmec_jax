@@ -4364,7 +4364,10 @@ def _infer_input_extension(*, path: str | Path, indata) -> str:
             continue
         name = Path(str(candidate)).name
         if name.startswith("input."):
-            return name[len("input.") :]
+            extension = name[len("input.") :]
+            if extension == "solovev":
+                return "vmecpp_solovev"
+            return extension
         if name.startswith("wout_") and name.endswith(".nc"):
             return name[len("wout_") : -len(".nc")]
         stem = Path(name).stem
@@ -5236,7 +5239,8 @@ def wout_minimal_from_fixed_boundary(
     if pres.size:
         pres = pres.copy()
         pres[0] = 0.0
-    # VMEC mass profile: mass = pmass * (|vnorm|*r00)^gamma
+    # VMEC stores the mass profile in the raw netCDF units, while `pres`
+    # here is kept in internal B^2 units (= mu0 * Pa).
     from .boundary import boundary_from_indata
 
     boundary = boundary_from_indata(indata, main_modes)
@@ -5251,7 +5255,7 @@ def wout_minimal_from_fixed_boundary(
         if chipf.size:
             chips = np.concatenate([chipf[:1], 0.5 * (chipf[1:] + chipf[:-1])], axis=0)
             vnorm = chips
-    mass = pres * (np.abs(vnorm) * r00) ** gamma
+    mass = (pres / MU0) * (np.abs(vnorm) * r00) ** gamma
     if mass.size:
         mass = mass.copy()
         mass[0] = 0.0
@@ -5546,11 +5550,11 @@ def wout_minimal_from_fixed_boundary(
     volume_p = volume * float(4.0 * np.pi**2)
     betatotal = (wp / wb) if wb != 0.0 else 0.0
 
-    # Reconstruct pressure from mass/vp to match VMEC's bcovar path.
+    # Reconstruct pressure from the stored mass profile back into internal B^2 units.
     pres = np.zeros_like(vp)
     with np.errstate(divide="ignore", invalid="ignore"):
         denom = np.where(vp != 0.0, vp, 1.0)
-        pres = np.where(vp != 0.0, mass / (denom**gamma), 0.0)
+        pres = np.where(vp != 0.0, MU0 * mass / (denom**gamma), 0.0)
     if pres.size:
         pres = pres.copy()
         pres[0] = 0.0
@@ -5987,10 +5991,29 @@ def wout_minimal_from_fixed_boundary(
         t_bsub_coeffs = _time.perf_counter()
     if not bool(lasym):
         bsubumnc = _vmec_wrout_nyquist_cos_coeffs(f=bsubu_out, modes=nyq_modes, trig=trig)
-        bsubvmnc = _vmec_wrout_nyquist_cos_coeffs(f=bsubv_out, modes=nyq_modes, trig=trig)
+        bsubv_wrout_raw = _vmec_wrout_nyquist_cos_coeffs(f=bsubv_out, modes=nyq_modes, trig=trig)
+        bsubv_corr = _apply_bsubv_equif_correction(
+            bsubv=np.asarray(bsubv_raw, dtype=float),
+            bsubv_e=np.asarray(bc.bsubv_e, dtype=float),
+            trig=trig,
+        )
+        bsubvmnc = _vmec_wrout_nyquist_cos_coeffs(
+            f=bsubv_corr,
+            modes=nyq_modes,
+            trig=trig,
+        )
+        mask_m0 = np.asarray(nyq_modes.m, dtype=int) == 0
+        if np.any(mask_m0):
+            bsubvmnc[:, mask_m0] = bsubv_wrout_raw[:, mask_m0]
         if bsubumnc.shape[0] > 0:
             bsubumnc[0, :] = 0.0
             bsubvmnc[0, :] = 0.0
+        m_mask = np.asarray(nyq_modes.m, dtype=int)
+        n_mask = np.asarray(nyq_modes.n, dtype=int)
+        mask_bsub = (m_mask >= int(mpol)) | (np.abs(n_mask) > int(ntor))
+        if np.any(mask_bsub):
+            bsubumnc[:, mask_bsub] = 0.0
+            bsubvmnc[:, mask_bsub] = 0.0
     if wout_timing_enabled:
         wout_timing["bsub_coeffs_s"] = _time.perf_counter() - t_bsub_coeffs
     # Keep bsubsmns from the direct bsubs_half computation (wrout.f). The

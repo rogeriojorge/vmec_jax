@@ -52,6 +52,9 @@ from .vmec_residue import vmec_pwint_from_trig
 from .nyquist import nyquist_basis_from_wout
 
 
+MU0 = 4e-7 * np.pi
+
+
 def _vmec_bcovar_profile_enabled() -> bool:
     value = os.environ.get("VMEC_JAX_PROFILE_BCOVAR", "")
     return value.strip().lower() not in ("", "0", "false", "no")
@@ -871,7 +874,7 @@ def vmec_bcovar_half_mesh_from_wout(
             safe_vp = jnp.where(vp != 0.0, vp, jnp.asarray(1.0, dtype=vp.dtype))
             pres_1d = jnp.where(
                 vp != 0.0,
-                mass_in / (safe_vp**gamma),
+                MU0 * mass_in / (safe_vp**gamma),
                 jnp.asarray(0.0, dtype=vp.dtype),
             )
             pres_h = pres_1d[:, None, None]
