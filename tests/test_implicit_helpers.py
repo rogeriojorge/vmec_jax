@@ -239,3 +239,64 @@ def test_fixed_boundary_residual_implicit_primal_matches_default_control_path(lo
     )
 
     assert np.asarray(pack_state(wrapped)) == pytest.approx(np.asarray(pack_state(direct)), rel=0.0, abs=1e-12)
+
+
+def test_fixed_boundary_residual_implicit_reduced_adjoint_modes_match_chunked_gradient(load_case_circular_tokamak):
+    pytest.importorskip("jax")
+
+    from vmec_jax._compat import enable_x64, jax, jnp
+    from vmec_jax.field import signgs_from_sqrtg
+    from vmec_jax.geom import eval_geom
+    from vmec_jax.implicit import ImplicitFixedBoundaryOptions, solve_fixed_boundary_state_implicit_vmec_residual
+
+    enable_x64(True)
+
+    _cfg, indata, static, boundary, state0 = load_case_circular_tokamak
+    signgs0 = signgs_from_sqrtg(np.asarray(eval_geom(state0, static).sqrtg), axis_index=1)
+    modes_m = np.asarray(static.modes.m)
+    modes_n = np.asarray(static.modes.n)
+    mode_candidates = np.flatnonzero((modes_m > 0) | (modes_n > 0))
+    mode_idx = int(mode_candidates[0])
+
+    base_rcos = np.asarray(boundary.R_cos)
+    base_rsin = np.asarray(boundary.R_sin)
+    base_zcos = np.asarray(boundary.Z_cos)
+    base_zsin = np.asarray(boundary.Z_sin)
+
+    def objective(alpha, adjoint_mode):
+        edge_rcos = jnp.asarray(base_rcos).at[mode_idx].set(alpha)
+        state = solve_fixed_boundary_state_implicit_vmec_residual(
+            state0,
+            static,
+            indata=indata,
+            signgs=int(signgs0),
+            state0_host=state0,
+            max_iter=1,
+            step_size=float(indata.get_float("DELT", 1.0)),
+            ftol=float(indata.get_float("FTOL", 1e-14)),
+            edge_Rcos=edge_rcos,
+            edge_Rsin=base_rsin,
+            edge_Zcos=base_zcos,
+            edge_Zsin=base_zsin,
+            implicit=ImplicitFixedBoundaryOptions(
+                cg_max_iter=80,
+                cg_tol=1e-10,
+                damping=1e-6,
+                residual_adjoint_mode=adjoint_mode,
+            ),
+        )
+        return (
+            jnp.sum(jnp.asarray(state.Rcos)[:, mode_idx] ** 2)
+            + 0.1 * jnp.sum(jnp.asarray(state.Zsin) ** 2)
+            + 0.01 * jnp.sum(jnp.asarray(state.Lsin) ** 2)
+        )
+
+    alpha0 = float(base_rcos[mode_idx])
+    reference_value = float(objective(alpha0, "chunked"))
+    reference_grad = float(jax.grad(lambda a: objective(a, "chunked"))(alpha0))
+
+    for mode in ("auto", "lineax", "direct"):
+        value = float(objective(alpha0, mode))
+        grad = float(jax.grad(lambda a, adjoint_mode=mode: objective(a, adjoint_mode))(alpha0))
+        assert value == pytest.approx(reference_value, rel=0.0, abs=1e-12)
+        assert grad == pytest.approx(reference_grad, rel=0.0, abs=1e-9)

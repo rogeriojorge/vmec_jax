@@ -1894,15 +1894,28 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
                 residual_size=int(np.prod(np.shape(residual_star_active))),
             )
             active_is_square = tuple(residual_star_active.shape) == tuple(b_active.shape)
-            use_chunked_active = residual_adjoint_mode in ("chunked", "dense")
-            use_lineax_active = (
-                residual_adjoint_mode == "lineax"
-                and active_is_square
+            # On the reduced stellarator-symmetric active coordinates, the
+            # explicit chunked Jacobian is the only path that consistently
+            # matches the dense reference solve. Matrix-free reduced adjoints
+            # can under-converge badly enough to spoil outer descent, so route
+            # the experimental modes through the explicit Jacobian path here.
+            use_chunked_active = residual_adjoint_mode in (
+                "auto",
+                "chunked",
+                "dense",
+                "lineax",
+                "direct",
+                "bicgstab",
             )
-            use_direct_stellsym = (
-                residual_adjoint_mode in ("direct", "bicgstab")
-                and active_is_square
-            )
+            use_lineax_active = False
+            use_direct_stellsym = False
+
+            def Hvp_active(lam):
+                jt_lam = residual_vjp_active(lam)[0]
+                j_jt_lam = residual_jvp_active(jt_lam)
+                return j_jt_lam + jnp.asarray(float(implicit.damping), dtype=jnp.asarray(lam).dtype) * lam
+
+            rhs_active = residual_jvp_active(b_active)
 
             if use_chunked_active:
                 chunk_size = getattr(implicit, "jac_chunk_size", None)
@@ -1951,34 +1964,24 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
                 return result
 
             if use_direct_stellsym:
-                from jax.scipy.sparse.linalg import bicgstab
-
-                def JT_active(v):
-                    return residual_vjp_active(v)[0] + jnp.asarray(float(implicit.damping), dtype=jnp.asarray(v).dtype) * v
-
                 direct_solve_start = time.perf_counter()
-                lam, info = bicgstab(
-                    JT_active,
-                    b_active,
+                lam = _cg_solve(
+                    Hvp_active,
+                    rhs_active,
                     tol=float(implicit.cg_tol),
-                    atol=0.0,
-                    maxiter=int(implicit.cg_max_iter),
+                    max_iter=int(implicit.cg_max_iter),
                 )
-                _vmec_backward_profile_log("direct_bicgstab_done", direct_solve_start, info=str(info))
-                if info is None:
-                    result = _boundary_param_vjp_active(lam)
-                    _vmec_backward_profile_log("bwd_done_direct", bwd_start)
-                    return result
+                _vmec_backward_profile_log("direct_cg_done", direct_solve_start)
+                result = _boundary_param_vjp_active(lam)
+                _vmec_backward_profile_log("bwd_done_direct", bwd_start)
+                return result
 
             if use_lineax_active:
                 direct_solve_start = time.perf_counter()
 
-                def JT_active_lineax(v):
-                    return residual_vjp_active(v)[0] + jnp.asarray(float(implicit.damping), dtype=jnp.asarray(v).dtype) * v
-
-                lam, success, stats = _lineax_bicgstab_solve(
-                    JT_active_lineax,
-                    b_active,
+                lam, success, stats = _lineax_cg_solve(
+                    Hvp_active,
+                    rhs_active,
                     tol=float(implicit.cg_tol),
                     max_iter=int(implicit.cg_max_iter),
                 )
@@ -2004,12 +2007,6 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
             #   argmin_lam ||J^T lam - b||^2 + damping ||lam||^2
             # whose normal equations are
             #   (J J^T + damping I) lam = J b.
-            def Hvp_active(lam):
-                jt_lam = residual_vjp_active(lam)[0]
-                j_jt_lam = residual_jvp_active(jt_lam)
-                return j_jt_lam + jnp.asarray(float(implicit.damping), dtype=jnp.asarray(lam).dtype) * lam
-
-            rhs_active = residual_jvp_active(b_active)
             cg_start = time.perf_counter()
             lam = _cg_solve(Hvp_active, rhs_active, tol=float(implicit.cg_tol), max_iter=int(implicit.cg_max_iter))
             _vmec_backward_profile_log("active_cg_done", cg_start)
