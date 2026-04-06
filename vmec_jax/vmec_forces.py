@@ -33,6 +33,7 @@ from .field import lamscale_from_phips
 from .grids import AngleGrid
 from .vmec_bcovar import vmec_bcovar_half_mesh_from_wout
 from .vmec_constraints import (
+    _finite_or_fallback,
     alias_gcon,
     precondn_diag_axd1_from_bcovar,
     tcon_from_bcovar_precondn_diag,
@@ -486,14 +487,15 @@ def _constraint_kernels_from_state(
                 ru0=ru0,
                 zu0=zu0,
             )
-            finite = jnp.all(jnp.isfinite(tcon_tmp))
-            tcon_heur = tcon_from_tcon0_heuristic(
-                tcon0=tcon0_val,
-                s=s,
-                trig=trig,
-                lasym=bool(wout.lasym),
+            return _finite_or_fallback(
+                tcon_tmp,
+                lambda: tcon_from_tcon0_heuristic(
+                    tcon0=tcon0_val,
+                    s=s,
+                    trig=trig,
+                    lasym=bool(wout.lasym),
+                ),
             )
-            return jnp.where(finite, tcon_tmp, tcon_heur)
 
         def _tcon_override(_):
             return jnp.asarray(tcon_override_arr, dtype=dtype)
@@ -528,14 +530,15 @@ def _constraint_kernels_from_state(
                 zu0=zu0,
             )
             # Fallback to a conservative constant profile if ill-conditioned.
-            finite = jnp.all(jnp.isfinite(tcon))
-            tcon_heur = tcon_from_tcon0_heuristic(
-                tcon0=float(constraint_tcon0),
-                s=s,
-                trig=trig,
-                lasym=bool(wout.lasym),
+            tcon = _finite_or_fallback(
+                tcon,
+                lambda: tcon_from_tcon0_heuristic(
+                    tcon0=float(constraint_tcon0),
+                    s=s,
+                    trig=trig,
+                    lasym=bool(wout.lasym),
+                ),
             )
-            tcon = jnp.where(finite, tcon, tcon_heur)
         else:
             tcon = jnp.asarray(tcon_override, dtype=dtype)
             if precond_diag_override is None:

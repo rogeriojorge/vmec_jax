@@ -614,14 +614,15 @@ def vmec_bcovar_half_mesh_from_wout(
         gvv = gvv.at[0].set(jnp.zeros_like(gvv[0]))
 
     def _half_even_odd_full(e_full, o_full):
-        e_half = jnp.zeros_like(guu)
-        o_half = jnp.zeros_like(guu)
-        if ns >= 2:
-            e_half = e_half.at[1:].set(0.5 * (e_full[1:] + e_full[:-1]))
-            o_half = o_half.at[1:].set(0.5 * (o_full[1:] + o_full[:-1]))
-            e_half = e_half.at[0].set(e_half[1])
-            o_half = o_half.at[0].set(o_half[1])
-        return e_half, o_half
+        if ns < 2:
+            z = jnp.zeros_like(guu)
+            return z, z
+        e_body = 0.5 * (e_full[1:] + e_full[:-1])
+        o_body = 0.5 * (o_full[1:] + o_full[:-1])
+        return (
+            jnp.concatenate([e_body[:1], e_body], axis=0),
+            jnp.concatenate([o_body[:1], o_body], axis=0),
+        )
 
     guu_eh, guu_oh = _half_even_odd_full(guu_e, guu_o)
     guv_eh, guv_oh = _half_even_odd_full(guv_e, guv_o)
@@ -725,10 +726,11 @@ def vmec_bcovar_half_mesh_from_wout(
         avg_lv0 = lv0_full[1:] + lv0_full[:-1]
         avg_lv1 = lv1_full[1:] + lv1_full[:-1]
 
-        bsupv_even = bsupv_even.at[1:].set(0.5 * overg[1:] * avg_lu0)
-        bsupv_odd = bsupv_odd.at[1:].set(0.5 * overg[1:] * avg_lu1)
-        bsupu_even = bsupu_even.at[1:].set(0.5 * overg[1:] * avg_lv0)
-        bsupu_odd = bsupu_odd.at[1:].set(0.5 * overg[1:] * avg_lv1)
+        zero = jnp.zeros_like(overg[:1])
+        bsupv_even = jnp.concatenate([zero, 0.5 * overg[1:] * avg_lu0], axis=0)
+        bsupv_odd = jnp.concatenate([zero, 0.5 * overg[1:] * avg_lu1], axis=0)
+        bsupu_even = jnp.concatenate([zero, 0.5 * overg[1:] * avg_lv0], axis=0)
+        bsupu_odd = jnp.concatenate([zero, 0.5 * overg[1:] * avg_lv1], axis=0)
 
         bsupv = bsupv_even + pshalf * bsupv_odd
         bsupu = bsupu_even + pshalf * bsupu_odd
@@ -743,7 +745,7 @@ def vmec_bcovar_half_mesh_from_wout(
             # run on the same angular discretization as guu/bsupu/bsupv.
             dnorm3 = jnp.asarray(getattr(trig, "dnorm3", 0.0), dtype=bsupu.dtype)
             pwint = jnp.broadcast_to(dnorm3, bsupu.shape)
-            pwint = pwint.at[0].set(jnp.zeros_like(bsupu[0]))
+            pwint = jnp.concatenate([jnp.zeros_like(pwint[:1]), pwint[1:]], axis=0)
 
         top = jnp.asarray(icurv, dtype=bsupu.dtype) - jnp.sum(
             pwint * ((guu * bsupu) + (guv * bsupv)),
@@ -754,9 +756,10 @@ def vmec_bcovar_half_mesh_from_wout(
         chips_dyn = jnp.asarray(chips_eff, dtype=bsupu.dtype)
         safe_bot = jnp.where(bot != 0.0, bot, jnp.asarray(1.0, dtype=bot.dtype))
         chips_new = jnp.where(bot != 0.0, top / safe_bot, chips_dyn)
-        chips_dyn = chips_dyn.at[0].set(jnp.asarray(0.0, dtype=chips_dyn.dtype))
-        chips_dyn = chips_dyn.at[1:].set(chips_new[1:])
-        chips_eff = chips_dyn
+        chips_eff = jnp.concatenate(
+            [jnp.zeros((1,), dtype=chips_new.dtype), chips_new[1:]],
+            axis=0,
+        )
 
     # `add_fluxes`: VMEC updates `bsupu` in VMEC orientation:
     #   bsupu <- bsupu + chips*overg.
@@ -793,12 +796,13 @@ def vmec_bcovar_half_mesh_from_wout(
 
     # VMEC enforces axis bsup*=0 explicitly.
     if ns >= 1:
-        bsupu = bsupu.at[0].set(jnp.zeros_like(bsupu[0]))
-        bsupv = bsupv.at[0].set(jnp.zeros_like(bsupv[0]))
-        bsupu_even = bsupu_even.at[0].set(jnp.zeros_like(bsupu_even[0]))
-        bsupv_even = bsupv_even.at[0].set(jnp.zeros_like(bsupv_even[0]))
-        bsupu_odd = bsupu_odd.at[0].set(jnp.zeros_like(bsupu_odd[0]))
-        bsupv_odd = bsupv_odd.at[0].set(jnp.zeros_like(bsupv_odd[0]))
+        zero_surface = jnp.zeros_like(bsupu[:1])
+        bsupu = jnp.concatenate([zero_surface, bsupu[1:]], axis=0)
+        bsupv = jnp.concatenate([zero_surface, bsupv[1:]], axis=0)
+        bsupu_even = jnp.concatenate([zero_surface, bsupu_even[1:]], axis=0)
+        bsupv_even = jnp.concatenate([zero_surface, bsupv_even[1:]], axis=0)
+        bsupu_odd = jnp.concatenate([zero_surface, bsupu_odd[1:]], axis=0)
+        bsupv_odd = jnp.concatenate([zero_surface, bsupv_odd[1:]], axis=0)
 
     bsubu = guu * bsupu + guv * bsupv
     bsubv = guv * bsupu + gvv * bsupv

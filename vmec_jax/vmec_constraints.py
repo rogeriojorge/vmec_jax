@@ -29,7 +29,7 @@ from typing import Any
 
 import numpy as np
 
-from ._compat import jnp, einsum
+from ._compat import jnp, einsum, has_jax, jax
 from .vmec_tomnsp import VmecTrigTables
 
 
@@ -96,6 +96,30 @@ def tcon_from_tcon0_heuristic(*, tcon0: float, s, trig: VmecTrigTables, lasym: b
     if ns >= 3:
         tcon = tcon.at[-1].set(0.5 * tcon[-2])
     return tcon.astype(jnp.asarray(trig.cosmu).dtype)
+
+
+def _surface_wint3_from_trig(*, trig: VmecTrigTables, ref) -> Any:
+    ref = jnp.asarray(ref)
+    wint3 = getattr(trig, "wint3_precond", None)
+    if wint3 is None:
+        w_theta = jnp.asarray(trig.cosmui3[:, 0], dtype=ref.dtype) / jnp.asarray(trig.mscale[0], dtype=ref.dtype)
+        wint = w_theta[:, None] * jnp.ones((int(trig.cosnv.shape[0]),), dtype=ref.dtype)[None, :]
+        wint3 = wint[None, :, :]
+    else:
+        wint3 = jnp.asarray(wint3, dtype=ref.dtype)
+    if wint3.shape[1:] != ref.shape[1:]:
+        dnorm3 = jnp.asarray(getattr(trig, "dnorm3", 0.0), dtype=ref.dtype)
+        wint3 = jnp.broadcast_to(dnorm3, (1,) + ref.shape[1:])
+    return wint3
+
+
+def _finite_or_fallback(primary, fallback_fn) -> Any:
+    finite = jnp.all(jnp.isfinite(primary))
+    if has_jax():
+        return jax.lax.cond(finite, lambda _: primary, lambda _: fallback_fn(), operand=None)
+    if bool(np.asarray(finite)):
+        return primary
+    return fallback_fn()
 
 
 def tcon_from_bcovar_precondn_diag(
@@ -201,22 +225,12 @@ def precondn_diag_axd1_from_bcovar(
     pfactor = -4.0 * float(trig.r0scale) ** 2
 
     # Angular integration weights (wint) on the VMEC internal grid.
-    wint3 = getattr(trig, "wint3_precond", None)
-    if wint3 is None:
-        w_theta = jnp.asarray(trig.cosmui3[:, 0]) / jnp.asarray(trig.mscale[0])
-        wint = w_theta[:, None] * jnp.ones((int(trig.cosnv.shape[0]),), dtype=w_theta.dtype)[None, :]
-        wint3 = wint[None, :, :]
-    else:
-        wint3 = jnp.asarray(wint3, dtype=jnp.asarray(trig.cosmu).dtype)
-
     bsq = jnp.asarray(bsq)
     r12 = jnp.asarray(r12)
     sqrtg = jnp.asarray(sqrtg)
     ru12 = jnp.asarray(ru12)
     zu12 = jnp.asarray(zu12)
-    if wint3.shape[1:] != bsq.shape[1:]:
-        dnorm3 = jnp.asarray(getattr(trig, "dnorm3", 0.0), dtype=bsq.dtype)
-        wint3 = jnp.broadcast_to(dnorm3, (1,) + bsq.shape[1:])
+    wint3 = _surface_wint3_from_trig(trig=trig, ref=bsq)
 
     # Avoid division by zero in ptau.
     gs = jnp.where(sqrtg != 0, sqrtg, jnp.ones_like(sqrtg))
@@ -251,17 +265,11 @@ def tcon_from_cached_precondn_diag(
 
     hs = jnp.asarray(s[1] - s[0], dtype=jnp.asarray(trig.cosmu).dtype)
 
-    w_theta = jnp.asarray(trig.cosmui3[:, 0]) / jnp.asarray(trig.mscale[0])
-    wint = w_theta[:, None] * jnp.ones((int(trig.cosnv.shape[0]),), dtype=w_theta.dtype)[None, :]
-    wint3 = wint[None, :, :]
-
     ard1 = jnp.asarray(ard1)
     azd1 = jnp.asarray(azd1)
     ru0 = jnp.asarray(ru0)
     zu0 = jnp.asarray(zu0)
-    if wint3.shape[1:] != ru0.shape[1:]:
-        dnorm3 = jnp.asarray(getattr(trig, "dnorm3", 0.0), dtype=ru0.dtype)
-        wint3 = jnp.broadcast_to(dnorm3, (1,) + ru0.shape[1:])
+    wint3 = _surface_wint3_from_trig(trig=trig, ref=ru0)
 
     arnorm = jnp.sum((ru0 * ru0) * wint3, axis=(1, 2))
     aznorm = jnp.sum((zu0 * zu0) * wint3, axis=(1, 2))
@@ -380,11 +388,9 @@ def tcon_from_precondn_axisym(
     azd1 = jnp.asarray(axd_z[:, 0], dtype=dtype)
 
     # Flux-surface norms of ru0/zu0 (bcovar.f).
-    w_theta = jnp.asarray(trig.cosmui3[:, 0], dtype=dtype) / jnp.asarray(trig.mscale[0], dtype=dtype)
-    wint = w_theta[:, None] * jnp.ones((int(trig.cosnv.shape[0]),), dtype=dtype)[None, :]
-    wint3 = wint[None, :, :]
     ru0 = jnp.asarray(ru0, dtype=dtype)
     zu0 = jnp.asarray(zu0, dtype=dtype)
+    wint3 = _surface_wint3_from_trig(trig=trig, ref=ru0)
     arnorm = jnp.sum((ru0 * ru0) * wint3, axis=(1, 2))
     aznorm = jnp.sum((zu0 * zu0) * wint3, axis=(1, 2))
     arnorm = jnp.where(arnorm != 0.0, arnorm, jnp.ones_like(arnorm))
