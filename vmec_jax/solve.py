@@ -1493,19 +1493,13 @@ def _axis_m0_mask(static, *, dtype):
 
 
 def _zero_coeff_column(arr, *, idx: int):
-    """Zero one Fourier coefficient column with concatenation instead of masking."""
+    """Zero one Fourier coefficient column with a broadcast mask."""
     arr = jnp.asarray(arr)
     ncols = int(arr.shape[1])
     if idx < 0 or idx >= ncols:
         return arr
-    zero = jnp.zeros_like(arr[:, :1])
-    if idx == 0:
-        if ncols == 1:
-            return zero
-        return jnp.concatenate([zero, arr[:, 1:]], axis=1)
-    if idx == ncols - 1:
-        return jnp.concatenate([arr[:, :idx], zero], axis=1)
-    return jnp.concatenate([arr[:, :idx], zero, arr[:, idx + 1 :]], axis=1)
+    mask = (jnp.arange(ncols) == int(idx)).astype(arr.dtype)[None, :]
+    return arr * (1.0 - mask)
 
 
 def _replace_mode_slice(arr, *, mode_idx: int, replacement):
@@ -1517,13 +1511,8 @@ def _replace_mode_slice(arr, *, mode_idx: int, replacement):
     if mode_idx < 0 or mode_idx >= nmodes:
         return arr
     repl = jnp.asarray(replacement, dtype=arr.dtype)[:, None, :]
-    if mode_idx == 0:
-        if nmodes == 1:
-            return repl
-        return jnp.concatenate([repl, arr[:, 1:, :]], axis=1)
-    if mode_idx == nmodes - 1:
-        return jnp.concatenate([arr[:, :mode_idx, :], repl], axis=1)
-    return jnp.concatenate([arr[:, :mode_idx, :], repl, arr[:, mode_idx + 1 :, :]], axis=1)
+    mask = (jnp.arange(nmodes) == int(mode_idx)).astype(arr.dtype)[None, :, None]
+    return (arr * (1.0 - mask)) + (repl * mask)
 
 
 def _scale_mode_slice(arr, *, mode_idx: int, scale):
@@ -1534,8 +1523,9 @@ def _scale_mode_slice(arr, *, mode_idx: int, scale):
     nmodes = int(arr.shape[1])
     if mode_idx < 0 or mode_idx >= nmodes:
         return arr
-    scaled = arr[:, mode_idx, :] * jnp.asarray(scale, dtype=arr.dtype)[:, None]
-    return _replace_mode_slice(arr, mode_idx=mode_idx, replacement=scaled)
+    mask = (jnp.arange(nmodes) == int(mode_idx)).astype(arr.dtype)[None, :, None]
+    scale_full = 1.0 + ((jnp.asarray(scale, dtype=arr.dtype)[:, None, None] - 1.0) * mask)
+    return arr * scale_full
 
 
 def _enforce_field_rows(arr, *, axis_mask=None, edge_row=None, zero_axis: bool = False):

@@ -1017,7 +1017,7 @@ def test_run_fixed_boundary_cli_explicit_staged_followup_runs_for_converged_nona
     ]
 
 
-def test_run_fixed_boundary_cli_current_driven_nonaxis_uses_direct_multigrid(monkeypatch, tmp_path):
+def test_run_fixed_boundary_cli_current_driven_nonaxis_uses_finish_first(monkeypatch, tmp_path):
     input_path = _write_staged_with_niter_nonaxis_current_input(tmp_path)
     calls = []
     fsq_values = [1.0e-8, 1.0e-10, 1.0e-14]
@@ -1062,19 +1062,18 @@ def test_run_fixed_boundary_cli_current_driven_nonaxis_uses_direct_multigrid(mon
         cli_fixed_boundary_mode=True,
     )
 
-    assert [call["ns"] for call in calls] == [5, 9, 13]
-    assert [call["max_iter"] for call in calls] == [10, 20, 40]
-    assert [call["use_scan"] for call in calls] == [False, False, False]
+    assert [call["ns"] for call in calls] == [13, 13, 13]
+    assert [call["max_iter"] for call in calls] == [70, 70, 70]
+    assert [call["use_scan"] for call in calls] == [False, True, True]
     diag = run.result.diagnostics
-    assert diag["cli_fixed_boundary_initial_policy"] == "multigrid"
-    assert np.asarray(diag["multigrid_stage_modes"]).tolist() == [
-        "accelerated",
-        "accelerated",
-        "accelerated",
-    ]
+    assert diag["cli_fixed_boundary_initial_policy"] == "single_grid"
+    assert diag["cli_fixed_boundary_staged_followup_used"] is False
+    assert np.asarray(diag["cli_fixed_boundary_finish_budgets"]).tolist() == [70, 70]
+    assert np.asarray(diag["cli_fixed_boundary_finish_modes"]).tolist() == ["accelerated", "accelerated"]
+    assert np.asarray(diag["cli_fixed_boundary_finish_converged"]).tolist() == [False, True]
 
 
-def test_run_fixed_boundary_cli_two_stage_current_driven_nonaxis_uses_multigrid(monkeypatch, tmp_path):
+def test_run_fixed_boundary_cli_two_stage_current_driven_nonaxis_uses_finish_first(monkeypatch, tmp_path):
     input_path = _write_two_stage_nonaxis_current_input(tmp_path)
     calls = []
     fsq_values = [1.0e-8, 1.0e-14]
@@ -1119,13 +1118,18 @@ def test_run_fixed_boundary_cli_two_stage_current_driven_nonaxis_uses_multigrid(
         cli_fixed_boundary_mode=True,
     )
 
-    assert [call["ns"] for call in calls] == [5, 13]
-    assert [call["max_iter"] for call in calls] == [10, 40]
+    assert [call["ns"] for call in calls] == [13, 13]
+    assert [call["max_iter"] for call in calls] == [50, 50]
+    assert [call["use_scan"] for call in calls] == [False, True]
     diag = run.result.diagnostics
-    assert diag["cli_fixed_boundary_initial_policy"] == "multigrid"
+    assert diag["cli_fixed_boundary_initial_policy"] == "single_grid"
+    assert diag["cli_fixed_boundary_staged_followup_used"] is False
+    assert np.asarray(diag["cli_fixed_boundary_finish_budgets"]).tolist() == [50]
+    assert np.asarray(diag["cli_fixed_boundary_finish_modes"]).tolist() == ["accelerated"]
+    assert np.asarray(diag["cli_fixed_boundary_finish_converged"]).tolist() == [True]
 
 
-def test_run_fixed_boundary_cli_three_stage_lasym_current_driven_nonaxis_uses_multigrid(
+def test_run_fixed_boundary_cli_three_stage_lasym_current_driven_nonaxis_uses_finish_first(
     monkeypatch, tmp_path
 ):
     input_path = _write_staged_with_niter_nonaxis_lasym_current_input(tmp_path)
@@ -1172,13 +1176,15 @@ def test_run_fixed_boundary_cli_three_stage_lasym_current_driven_nonaxis_uses_mu
         cli_fixed_boundary_mode=True,
     )
 
-    assert [call["ns"] for call in calls] == [5, 9, 13]
-    assert [call["max_iter"] for call in calls] == [10, 20, 40]
-    assert [call["use_scan"] for call in calls] == [False, False, False]
+    assert [call["ns"] for call in calls] == [13, 13, 13]
+    assert [call["max_iter"] for call in calls] == [70, 70, 70]
+    assert [call["use_scan"] for call in calls] == [True, True, True]
     diag = run.result.diagnostics
-    assert diag["cli_fixed_boundary_initial_policy"] == "multigrid"
-    assert "cli_fixed_boundary_staged_followup_used" not in diag
-    assert np.asarray(diag["multigrid_stage_modes"]).tolist() == ["parity", "parity", "parity"]
+    assert diag["cli_fixed_boundary_initial_policy"] == "single_grid"
+    assert diag["cli_fixed_boundary_staged_followup_used"] is False
+    assert np.asarray(diag["cli_fixed_boundary_finish_budgets"]).tolist() == [70, 70]
+    assert np.asarray(diag["cli_fixed_boundary_finish_modes"]).tolist() == ["accelerated", "accelerated"]
+    assert np.asarray(diag["cli_fixed_boundary_finish_converged"]).tolist() == [False, True]
 
 
 def test_vmec2000_iter_histories_materialize_numeric_arrays():

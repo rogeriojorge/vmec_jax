@@ -1635,10 +1635,12 @@ def run_fixed_boundary(
         and (len(niter_list_input) == len(ns_list_input))
         and (int(indata.get_int("NCURR", 0)) != 0)
     )
-    direct_staged_current_driven_3d_cli = bool(current_driven_3d_cli)
-    deferred_staged_current_driven_3d_cli = bool(current_driven_3d_cli) and (
-        not bool(direct_staged_current_driven_3d_cli)
-    )
+    # These cases benefit from the same finish-first policy used for other
+    # staged fixed-boundary inputs: try a direct final-grid accelerated solve,
+    # then only replay the explicit staged schedule if the current-state
+    # finish attempts miss the requested tolerance.
+    direct_staged_current_driven_3d_cli = False
+    deferred_staged_current_driven_3d_cli = bool(current_driven_3d_cli)
     if multigrid is None:
         multigrid = solver_lower == "vmec2000_iter"
         if bool(cli_budgeted_multigrid_requested):
