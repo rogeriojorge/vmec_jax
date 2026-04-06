@@ -890,11 +890,11 @@ def test_run_fixed_boundary_accelerated_mode_defaults_to_single_grid():
     assert np.asarray(diag_parity["multigrid_ns_stages"]).tolist() == [11, 25]
 
 
-def test_run_fixed_boundary_cli_explicit_staged_followup_after_single_grid_miss(monkeypatch, tmp_path):
+def test_run_fixed_boundary_cli_single_grid_miss_tries_finish_before_staged_followup(monkeypatch, tmp_path):
     input_path = _write_staged_with_niter_input(tmp_path)
     calls = []
-    fsq_values = [1.0e-4, 1.0e-2, 1.0e-4, 2.0e-14]
-    converged_flags = [False, False, False, True]
+    fsq_values = [1.0e-4, 1.0e-2, 1.0e-3, 1.0e-4, 1.0e-5, 2.0e-14]
+    converged_flags = [False, False, False, False, False, True]
 
     def _fake_solver(state, static, **kwargs):
         idx = len(calls)
@@ -935,22 +935,25 @@ def test_run_fixed_boundary_cli_explicit_staged_followup_after_single_grid_miss(
         cli_fixed_boundary_mode=True,
     )
 
-    assert [call["ns"] for call in calls] == [13, 5, 9, 13]
-    assert [call["max_iter"] for call in calls] == [70, 10, 20, 40]
-    assert [call["use_scan"] for call in calls] == [True, True, True, False]
+    assert [call["ns"] for call in calls] == [13, 13, 13, 13, 13, 13]
+    assert [call["max_iter"] for call in calls] == [70, 70, 70, 35, 18, 18]
+    assert [call["use_scan"] for call in calls] == [True, True, True, True, True, True]
     diag = run.result.diagnostics
     assert diag["cli_fixed_boundary_mode"] is True
     assert diag["cli_fixed_boundary_initial_policy"] == "single_grid"
-    assert diag["cli_fixed_boundary_staged_followup_used"] is True
-    assert diag["cli_fixed_boundary_staged_followup_policy"] == "input_multigrid"
-    assert np.asarray(diag["cli_fixed_boundary_staged_followup_ns"]).tolist() == [5, 9, 13]
-    assert np.asarray(diag["cli_fixed_boundary_staged_followup_niter"]).tolist() == [10, 20, 40]
-    assert np.asarray(diag["cli_fixed_boundary_staged_followup_modes"]).tolist() == [
-        "accelerated",
+    assert diag["cli_fixed_boundary_staged_followup_used"] is False
+    assert diag["cli_fixed_boundary_staged_followup_policy"] == ""
+    assert np.asarray(diag["cli_fixed_boundary_staged_followup_ns"]).tolist() == []
+    assert np.asarray(diag["cli_fixed_boundary_staged_followup_niter"]).tolist() == []
+    assert np.asarray(diag["cli_fixed_boundary_staged_followup_modes"]).tolist() == []
+    assert np.asarray(diag["cli_fixed_boundary_finish_budgets"]).tolist() == [70, 70, 35, 18, 18]
+    assert np.asarray(diag["cli_fixed_boundary_finish_modes"]).tolist() == [
         "accelerated",
         "parity",
+        "parity",
+        "parity",
+        "parity",
     ]
-    assert np.asarray(diag["cli_fixed_boundary_finish_budgets"]).tolist() == []
     assert diag["converged"] is True
 
 

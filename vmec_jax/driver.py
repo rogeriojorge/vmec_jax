@@ -1437,9 +1437,8 @@ def run_fixed_boundary(
                 else [float(indata.get_float("FTOL", 1.0e-13))] * len(ns_list_input)
             )
             missed_target = not bool(_result_meets_requested_ftol(best_run.result, ftol=float(requested_ftol)))
-            should_run_staged_followup = bool(explicit_niter_stages is not None) and (
-                bool(require_staged_followup) or bool(missed_target)
-            )
+            allow_deferred_staged_followup = bool(explicit_niter_stages is not None) and (not bool(require_staged_followup))
+            should_run_staged_followup = bool(explicit_niter_stages is not None) and bool(require_staged_followup)
             if should_run_staged_followup:
                 staged_followup = _run_cli_explicit_staged_followup(
                     ns_stage_list=[int(v) for v in ns_list_input],
@@ -1458,6 +1457,9 @@ def run_fixed_boundary(
                 if staged_conv or (staged_fsq_val < float(best_fsq)):
                     best_run = staged_followup
                     best_fsq = float(staged_fsq_val)
+        else:
+            missed_target = False
+            allow_deferred_staged_followup = False
 
         max_fallback_budget = int(2 * base_total_budget)
         improvement_floor = np.finfo(float).eps * max(1.0, abs(float(best_fsq)), abs(float(target_fsq)))
@@ -1518,6 +1520,30 @@ def run_fixed_boundary(
                 if int(next_budget) == int(budget_i):
                     break
                 budget_i = int(next_budget)
+
+        if (
+            bool(allow_deferred_staged_followup)
+            and bool(missed_target)
+            and (not bool(staged_followup_used))
+            and (not bool(_result_meets_requested_ftol(best_run.result, ftol=float(requested_ftol))))
+        ):
+            staged_followup = _run_cli_explicit_staged_followup(
+                ns_stage_list=[int(v) for v in ns_list_input],
+                niter_stage_list=explicit_niter_stages,
+                ftol_stage_list=explicit_ftol_stages,
+            )
+            staged_followup_used = True
+            staged_followup_policy = "input_multigrid_deferred"
+            staged_diag = dict(staged_followup.result.diagnostics)
+            staged_followup_ns = np.asarray(staged_diag.get("cli_staged_followup_stage_ns", []), dtype=int)
+            staged_followup_niter = np.asarray(staged_diag.get("cli_staged_followup_stage_niter", []), dtype=int)
+            staged_followup_modes = np.asarray(staged_diag.get("cli_staged_followup_stage_modes", []), dtype=object)
+            staged_followup_fsq = np.asarray(staged_diag.get("cli_staged_followup_stage_fsq", []), dtype=float)
+            staged_fsq_val = float(_result_final_fsq(staged_followup.result))
+            staged_conv = bool(_result_meets_requested_ftol(staged_followup.result, ftol=float(requested_ftol)))
+            if staged_conv or (staged_fsq_val < float(best_fsq)):
+                best_run = staged_followup
+                best_fsq = float(staged_fsq_val)
 
         if staged_input and not (
             bool(_result_meets_requested_ftol(best_run.result, ftol=float(requested_ftol)))
