@@ -78,6 +78,17 @@ def _format_ratio(value: float | None) -> str:
     return f"{value:.2f}x"
 
 
+def _normalize_public_solver_mode_arg(value: str | None) -> str | None:
+    """Map benchmark mode labels onto the public driver route."""
+
+    if value is None:
+        return None
+    mode = str(value).strip().lower()
+    if mode in ("", "default", "auto"):
+        return None
+    return mode
+
+
 def _parse_time_metrics(stderr: str) -> dict[str, int | None]:
     out: dict[str, int | None] = {
         "peak_footprint_bytes": None,
@@ -314,7 +325,8 @@ def _quality_metrics(run, input_path: Path) -> dict:
 
 
 input_path = Path(sys.argv[1])
-solver_mode = str(sys.argv[2])
+solver_mode_arg = str(sys.argv[2]).strip()
+solver_mode = None if solver_mode_arg == "" else solver_mode_arg
 cli_fixed_boundary_mode = bool(int(sys.argv[3]))
 max_iter = None if sys.argv[4] == "none" else int(sys.argv[4])
 warm_runs = int(sys.argv[5])
@@ -323,9 +335,10 @@ warm_runs = int(sys.argv[5])
 def _run_once():
     kwargs = dict(
         verbose=False,
-        solver_mode=solver_mode,
         cli_fixed_boundary_mode=bool(cli_fixed_boundary_mode),
     )
+    if solver_mode is not None:
+        kwargs["solver_mode"] = solver_mode
     if max_iter is not None:
         kwargs["max_iter"] = int(max_iter)
     t0 = time.perf_counter()
@@ -358,7 +371,8 @@ else:
 
 payload = {
     "backend": "vmec_jax",
-    "solver_mode": solver_mode,
+    "requested_solver_mode": ("default" if solver_mode is None else solver_mode),
+    "solver_mode": diag.get("solver_mode"),
     "cli_fixed_boundary_mode": bool(cli_fixed_boundary_mode),
     "runtime_cold_s": float(cold_dt),
     "runtime_warm_s": float(np.mean(warm_times)) if warm_times else None,
@@ -385,7 +399,7 @@ print(json.dumps(payload))
             "-c",
             code,
             str(case.input_path),
-            str(solver_mode),
+            "" if solver_mode is None else str(solver_mode),
             "1" if bool(cli_fixed_boundary_mode) else "0",
             "none" if max_iter is None else str(int(max_iter)),
             str(int(warm_runs)),
@@ -398,7 +412,8 @@ print(json.dumps(payload))
     rec: dict[str, Any] = {
         "backend": "vmec_jax",
         "case_id": case.id,
-        "solver_mode": str(solver_mode),
+        "requested_solver_mode": "default" if solver_mode is None else str(solver_mode),
+        "solver_mode": "unknown",
         "cli_fixed_boundary_mode": bool(cli_fixed_boundary_mode),
         "returncode": int(out["returncode"]),
         "time_real_s": float(out["time_real_s"]),
@@ -441,8 +456,18 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--ids", type=str, default="", help="Comma-separated case ids to run.")
     p.add_argument("--kind", choices=("fixed", "freeb", "all"), default="fixed", help="Case filter.")
-    p.add_argument("--baseline-mode", type=str, default="default", help="Baseline solver mode.")
-    p.add_argument("--candidate-mode", type=str, default="accelerated", help="Candidate solver mode.")
+    p.add_argument(
+        "--baseline-mode",
+        type=str,
+        default="default",
+        help="Baseline solver mode. Use 'default' or 'auto' for the ordinary public auto-policy path.",
+    )
+    p.add_argument(
+        "--candidate-mode",
+        type=str,
+        default="accelerated",
+        help="Candidate solver mode. Use 'default' or 'auto' for the ordinary public auto-policy path.",
+    )
     p.add_argument(
         "--baseline-cli-fixed-boundary-mode",
         action="store_true",
@@ -485,6 +510,8 @@ def main() -> int:
     outdir = args.outdir.resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     env = _child_env(jax_platforms=args.jax_platforms.strip() or None)
+    baseline_mode_arg = _normalize_public_solver_mode_arg(args.baseline_mode)
+    candidate_mode_arg = _normalize_public_solver_mode_arg(args.candidate_mode)
 
     results: list[dict[str, Any]] = []
     rows = [
@@ -497,7 +524,7 @@ def main() -> int:
         print(f"[{idx}/{len(cases)}] {case.id}", flush=True)
         baseline = _run_solver_mode_case(
             case=case,
-            solver_mode=str(args.baseline_mode),
+            solver_mode=baseline_mode_arg,
             cli_fixed_boundary_mode=bool(args.baseline_cli_fixed_boundary_mode),
             max_iter=args.max_iter,
             warm_runs=int(args.warm_runs),
@@ -506,7 +533,7 @@ def main() -> int:
         )
         candidate = _run_solver_mode_case(
             case=case,
-            solver_mode=str(args.candidate_mode),
+            solver_mode=candidate_mode_arg,
             cli_fixed_boundary_mode=bool(args.candidate_cli_fixed_boundary_mode),
             max_iter=args.max_iter,
             warm_runs=int(args.warm_runs),
@@ -526,8 +553,8 @@ def main() -> int:
         mem_ratio = _mem_ratio(candidate, baseline)
         comp = {
             "case_id": case.id,
-            "baseline_mode": str(args.baseline_mode),
-            "candidate_mode": str(args.candidate_mode),
+            "baseline_mode": "default" if baseline_mode_arg is None else str(baseline_mode_arg),
+            "candidate_mode": "default" if candidate_mode_arg is None else str(candidate_mode_arg),
             "baseline_cli_fixed_boundary_mode": bool(args.baseline_cli_fixed_boundary_mode),
             "candidate_cli_fixed_boundary_mode": bool(args.candidate_cli_fixed_boundary_mode),
             "warm_speedup": warm_speedup,

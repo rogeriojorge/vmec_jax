@@ -793,6 +793,7 @@ def vmec_forces_rz_from_wout(
             use_wout_bmag_for_bsq=use_wout_bsup,
             use_vmec_synthesis=use_vmec_synthesis,
             trig=trig,
+            include_bsub_parity_channels=False,
             return_parity_aux=True,
         )
     _vmec_force_profile_log("bcovar_done", bcovar_start)

@@ -74,6 +74,23 @@ def _format_ratio(value: float | None) -> str:
     return f"{value:.2f}x"
 
 
+def _normalize_public_solver_mode_arg(value: str | None) -> str | None:
+    """Map benchmark CLI labels onto the public driver route.
+
+    The ordinary public route is selected by leaving ``solver_mode`` unset in
+    ``run_fixed_boundary``. Treat ``default`` and ``auto`` as aliases for that
+    route so benchmarking commands and stored artifacts match the executable's
+    fixed-boundary default policy.
+    """
+
+    if value is None:
+        return None
+    mode = str(value).strip().lower()
+    if mode in ("", "default", "auto"):
+        return None
+    return mode
+
+
 def _parse_time_metrics(stderr: str) -> dict[str, int | None]:
     out: dict[str, int | None] = {
         "peak_footprint_bytes": None,
@@ -203,6 +220,7 @@ res = getattr(run, "result", None)
 diag = {} if res is None else dict(getattr(res, "diagnostics", {}) or {})
 payload = {
     "backend": "vmec_jax",
+    "requested_solver_mode": ("default" if solver_mode is None else solver_mode),
     "runtime_s": float(dt),
     "runtime_cold_s": float(dt),
     "runtime_warm_s": (None if not warm_times else float(sum(warm_times) / len(warm_times))),
@@ -211,7 +229,7 @@ payload = {
     "converged": bool(diag.get("converged", False)),
     "use_scan": bool(diag.get("use_scan", False)),
     "free_boundary": bool(diag.get("free_boundary", False)),
-    "solver_mode": (diag.get("solver_mode") if solver_mode is None else solver_mode),
+    "solver_mode": diag.get("solver_mode"),
     "cli_fixed_boundary_mode": bool(cli_fixed_boundary_mode),
     "platform": str(jax.default_backend()),
     "device_kind": str(jax.devices()[0].device_kind) if jax.devices() else "unknown",
@@ -255,7 +273,8 @@ print(json.dumps(payload))
         rec["n_iter"] = int(payload.get("n_iter", -1))
         rec["converged"] = bool(payload.get("converged", False))
         rec["use_scan"] = bool(payload.get("use_scan", False))
-        rec["solver_mode"] = str(payload.get("solver_mode", solver_mode))
+        rec["requested_solver_mode"] = str(payload.get("requested_solver_mode", "default" if solver_mode is None else solver_mode))
+        rec["solver_mode"] = str(payload.get("solver_mode", "unknown"))
         rec["cli_fixed_boundary_mode"] = bool(payload.get("cli_fixed_boundary_mode", cli_fixed_boundary_mode))
         rec["platform"] = str(payload.get("platform", "unknown"))
         rec["device_kind"] = str(payload.get("device_kind", "unknown"))
@@ -567,8 +586,8 @@ def main() -> int:
         default="",
         help=(
             "Optional explicit solver mode passed to run_fixed_boundary "
-            "('default', 'parity', or 'accelerated'). Leave unset to benchmark "
-            "the ordinary public auto-policy path."
+            "('default'/'auto', 'parity', or 'accelerated'). Leave unset or pass "
+            "'default' to benchmark the ordinary public auto-policy path."
         ),
     )
     p.add_argument(
@@ -611,7 +630,8 @@ def main() -> int:
     run_vmec2000 = args.backend in ("all", "both", "vmec2000")
     child_env = _child_env(jax_platforms=args.jax_platforms.strip() or None)
     child_env["VMEC_JAX_BENCH_WARM_RUNS"] = str(max(0, int(args.warm_runs)))
-    solver_mode_arg = str(args.solver_mode).strip() or None
+    requested_solver_mode = str(args.solver_mode).strip() or "default"
+    solver_mode_arg = _normalize_public_solver_mode_arg(args.solver_mode)
     vmec_exec = None if args.vmec_exec is None else Path(args.vmec_exec).expanduser().resolve()
     if run_vmec2000 and (vmec_exec is None or not vmec_exec.exists()):
         raise SystemExit("VMEC2000 executable not found. Use --vmec-exec.")
@@ -676,6 +696,7 @@ def main() -> int:
         "results": results,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "runner_label": str(args.runner_label),
+        "requested_solver_mode": requested_solver_mode,
         "solver_mode": solver_mode_arg,
         "cli_fixed_boundary_mode": bool(args.cli_fixed_boundary_mode),
         "warm_runs": int(args.warm_runs),

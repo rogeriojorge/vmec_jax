@@ -1,6 +1,6 @@
 # VMEC-JAX Master Plan and New-Agent Handoff (Living Document)
 
-Last updated: 2026-04-04
+Last updated: 2026-04-06 11:43 CDT
 Primary owner: `vmec_jax` contributors
 Canonical repo: `<repo-root>`
 
@@ -742,6 +742,60 @@ Legend:
 ---
 
 ## 13) Activity log (append-only)
+
+### 2026-04-06 11:43 CDT
+- Stable public fixed-boundary CPU artifact remains:
+  `outputs/fixed_runtime_accel_cpu_bundle_20260406_r2/summary.json`.
+  Representative warmed rows on the kept branch state:
+  `ITERModel ~2.29s`, `LandremanPaul2021_QA_lowres ~18.22s`,
+  `LandremanPaul2021_QA_lowres1 ~16.74s`,
+  `LandremanPaul2021_QA_reactorScale_lowres ~23.31s`,
+  `LandremanPaul2021_QH_reactorScale_lowres ~31.85s`,
+  `basic_non_stellsym_pressure ~5.16s`.
+- Control-path work that was tried and rejected after focused tests and
+  representative benchmarks:
+  - replaced host-side `_ptau_minmax_from_k_host(...)` with a device-side
+    jitted scalar reduction path; exact/test-safe, but not a net runtime win,
+  - batched `_enforce_field_rows(...)` inside
+    `_enforce_fixed_boundary_and_axis(...)`; slower end-to-end,
+  - added `_scale_mode_one(...)` for the `m=1` preconditioner scaling block;
+    slower end-to-end,
+  - routed repeated state enforcement through a local jitted closure; faster in
+    isolation but slower in the real solve loop,
+  - batched the symmetric Z/lambda sine-to-signed update conversion through the
+    existing `_mn_sin_to_signed_physical_batch(...)`; catastrophic regression on
+    the representative slice.
+- Main scan/controller audit finding:
+  the public representative fixed-boundary cases (`ITERModel`,
+  `LandremanPaul2021_QA_lowres`, `basic_non_stellsym_pressure`,
+  `up_down_asymmetric_tokamak`) all use the accelerated scan controller on the
+  ordinary auto CLI path, so end-to-end optimization work should prioritize the
+  accelerated scan path and its finish policy over more non-scan helper
+  reshaping.
+- Kept driver optimization in `vmec_jax/driver.py`:
+  `_maybe_finish_cli_fixed_boundary_run(...)` no longer launches further
+  accelerated finish retries once the current run has already met its total-FSQ
+  target. It now hands off directly to the strict parity finisher.
+- Direct warmed A/B checks for that kept optimization on the ordinary auto CLI
+  path (`run_fixed_boundary(..., cli_fixed_boundary_mode=True)` with no
+  explicit solver mode):
+  - `ITERModel`: about `2.47s -> 1.22s`,
+  - `LandremanPaul2021_QA_lowres`: about `19.08s -> 17.70s`,
+  - `basic_non_stellsym_pressure`: about `5.42s -> 3.35s`,
+  - `up_down_asymmetric_tokamak`: about `3.17s -> 2.73s`.
+- Focused regression status after the kept driver change:
+  `pytest -q tests/test_solve_hotpaths.py tests/test_driver_api.py` ->
+  `41 passed, 1 skipped`.
+- Benchmark-tool routing fix kept in this session:
+  `tools/diagnostics/example_runtime_memory_matrix.py` and
+  `tools/diagnostics/benchmark_accelerated_mode.py` now treat
+  `default` / `auto` as aliases for the ordinary public auto-policy path rather
+  than passing a distinct explicit `solver_mode="default"` into
+  `run_fixed_boundary(...)`.
+- Important benchmarking caveat recorded from the same session:
+  artifacts collected before that helper fix with explicit
+  `--solver-mode default` are not decision-grade for the ordinary public auto
+  CLI path, because they exercised a different controller route.
 
 ### 2026-04-04
 - Verified the backend-aware quiet-scan chunking policy now present in `solve.py`:

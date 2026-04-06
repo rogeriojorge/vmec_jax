@@ -138,6 +138,26 @@ def _dense_transpose_lstsq_host(J, b, damping):
     return np.asarray(lam_host, dtype=J_host.dtype)
 
 
+def _dense_transpose_lstsq_jax(J, b, damping: float):
+    """Device-side least-squares solve for J^T lam ~= b with optional Tikhonov damping."""
+    J_arr = jnp.asarray(J)
+    b_arr = jnp.asarray(b)
+    A_arr = jnp.swapaxes(J_arr, 0, 1)
+    damping_f = float(damping)
+    if damping_f > 0.0:
+        eye = jnp.eye(int(A_arr.shape[1]), dtype=A_arr.dtype)
+        A_arr = jnp.concatenate(
+            [A_arr, jnp.sqrt(jnp.asarray(damping_f, dtype=A_arr.dtype)) * eye],
+            axis=0,
+        )
+        b_arr = jnp.concatenate(
+            [b_arr, jnp.zeros((int(eye.shape[0]),), dtype=b_arr.dtype)],
+            axis=0,
+        )
+    lam_arr, *_ = jnp.linalg.lstsq(A_arr, b_arr, rcond=None)
+    return jnp.asarray(lam_arr, dtype=J_arr.dtype)
+
+
 @dataclass(frozen=True)
 class ImplicitLambdaOptions:
     """Controls for the implicit backward pass."""
@@ -156,6 +176,7 @@ class ImplicitFixedBoundaryOptions:
     damping: float = 1e-6
     residual_adjoint_mode: str = "auto"
     residual_tangent_mode: str = "opaque"
+    residual_forward_mode: str = "callback"
     jac_chunk_size: int | None = None
 
 
@@ -1398,11 +1419,56 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
         zero_m1 = 1.0 if (int(getattr(res, "n_iter", 0)) < 2 or (fsqz_hist.size > 0 and float(fsqz_hist[-1]) < 1.0e-6)) else 0.0
         return np.asarray(pack_state(res.state)), np.asarray(zero_m1, dtype=state0_host.Rcos.dtype)
 
+    def _solve_scan(eRcos, eRsin, eZcos, eZsin):
+        boundary = BoundaryCoeffs(
+            R_cos=jnp.asarray(eRcos),
+            R_sin=jnp.asarray(eRsin),
+            Z_cos=jnp.asarray(eZcos),
+            Z_sin=jnp.asarray(eZsin),
+        )
+        state_init = initial_guess_from_boundary(
+            static,
+            boundary,
+            indata,
+            dtype=jnp.asarray(state0_c.Rcos).dtype,
+            vmec_project=True,
+        )
+        res = solve_fixed_boundary_residual_iter(
+            state_init,
+            static,
+            indata=indata,
+            signgs=signgs_i,
+            ftol=ftol,
+            max_iter=int(max_iter),
+            step_size=float(step_size),
+            vmec2000_control=True,
+            reference_mode=False,
+            backtracking=False,
+            limit_dt_from_force=False,
+            limit_update_rms=False,
+            verbose=False,
+            verbose_vmec2000_table=False,
+            jit_forces="auto",
+            use_scan=True,
+        )
+        resume_state = getattr(res, "diagnostics", {}).get("resume_state", {})
+        fsqz_prev = jnp.asarray(resume_state.get("fsqz_prev", 1.0), dtype=jnp.asarray(state0_c.Rcos).dtype)
+        zero_m1 = jnp.where(
+            jnp.logical_or(jnp.asarray(int(max_iter) < 2), fsqz_prev < 1.0e-6),
+            jnp.asarray(1.0, dtype=jnp.asarray(state0_c.Rcos).dtype),
+            jnp.asarray(0.0, dtype=jnp.asarray(state0_c.Rcos).dtype),
+        )
+        return res.state, zero_m1
+
     def _is_traced(*xs):
         return any(isinstance(x, jax.core.Tracer) for x in xs)
 
     def _solve(eRcos, eRsin, eZcos, eZsin):
         traced = _is_traced(eRcos, eRsin, eZcos, eZsin)
+        forward_mode = str(getattr(implicit, "residual_forward_mode", "auto")).strip().lower()
+        use_scan_forward = forward_mode == "scan"
+        if use_scan_forward:
+            return _solve_scan(eRcos, eRsin, eZcos, eZsin)
         if traced:
             out_shape = (
                 jax.ShapeDtypeStruct((int(state0_c.layout.size),), jnp.asarray(state0_c.Rcos).dtype),
@@ -1963,10 +2029,15 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
                             dtype=J_active.dtype,
                         )
                 else:
-                    H_active = J_active @ J_active.T
-                    H_active = H_active + damping * jnp.eye(int(H_active.shape[0]), dtype=H_active.dtype)
-                    rhs_active = J_active @ b_active
-                    lam = jnp.linalg.solve(H_active, rhs_active)
+                    # Keep the explicit chunked Jacobian path, but solve the
+                    # same damped transpose least-squares problem as the dense
+                    # reference instead of squaring the condition number via
+                    # normal equations.
+                    lam = _dense_transpose_lstsq_jax(
+                        J_active,
+                        b_active,
+                        float(implicit.damping),
+                    )
                 _vmec_backward_profile_log("active_dense_solve_done", solve_start)
                 result = _boundary_param_vjp_active(lam)
                 _vmec_backward_profile_log("bwd_done_chunked", bwd_start)

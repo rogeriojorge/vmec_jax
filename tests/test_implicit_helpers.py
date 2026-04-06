@@ -241,7 +241,7 @@ def test_fixed_boundary_residual_implicit_primal_matches_default_control_path(lo
     assert np.asarray(pack_state(wrapped)) == pytest.approx(np.asarray(pack_state(direct)), rel=0.0, abs=1e-12)
 
 
-def test_fixed_boundary_residual_implicit_reduced_adjoint_modes_match_chunked_gradient(load_case_circular_tokamak):
+def test_fixed_boundary_residual_implicit_reduced_adjoint_modes_match_dense_gradient(load_case_circular_tokamak):
     pytest.importorskip("jax")
 
     from vmec_jax._compat import enable_x64, jax, jnp
@@ -292,10 +292,10 @@ def test_fixed_boundary_residual_implicit_reduced_adjoint_modes_match_chunked_gr
         )
 
     alpha0 = float(base_rcos[mode_idx])
-    reference_value = float(objective(alpha0, "chunked"))
-    reference_grad = float(jax.grad(lambda a: objective(a, "chunked"))(alpha0))
+    reference_value = float(objective(alpha0, "dense"))
+    reference_grad = float(jax.grad(lambda a: objective(a, "dense"))(alpha0))
 
-    for mode in ("auto", "lineax", "direct"):
+    for mode in ("chunked", "auto", "lineax", "direct"):
         value = float(objective(alpha0, mode))
         grad = float(jax.grad(lambda a, adjoint_mode=mode: objective(a, adjoint_mode))(alpha0))
         assert value == pytest.approx(reference_value, rel=0.0, abs=1e-12)

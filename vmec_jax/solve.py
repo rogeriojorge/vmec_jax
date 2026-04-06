@@ -5617,7 +5617,7 @@ def solve_fixed_boundary_residual_iter(
     scalxc_mn = vmec_scalxc_from_s(s=s, mpol=int(static.cfg.mpol)).astype(jnp.asarray(state0.Rcos).dtype)[:, :, None]
     if not bool(divide_by_scalxc_for_update):
         scalxc_mn = jnp.ones_like(scalxc_mn)
-    scalxc_mn_np = np.asarray(scalxc_mn, dtype=float)
+    scalxc_mn_np = np.asarray(scalxc_mn, dtype=float) if host_update_assembly else None
 
     def _mn_cos_to_signed_host(cc, ss):
         cc_np = np.asarray(cc, dtype=float)

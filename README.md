@@ -161,6 +161,13 @@ bundled current-driven `cth_like_fixed_bdy` case so the iota channel is active.
 - Use `--parity` (or `performance_mode=False` in Python) to force the conservative VMEC2000 loop.
 - Use `--solver-mode accelerated` to force the optimized fixed-boundary controller explicitly.
 
+Recent fixed-boundary status on `codex/qh-parity-wip` as of 2026-04-06:
+
+- the current public bundled CPU comparison artifact is `outputs/fixed_runtime_accel_cpu_bundle_20260406_r2/summary.json`, with warmed representative rows around `2.29s` for `ITERModel`, `18.22s` for `LandremanPaul2021_QA_lowres`, `23.31s` for `LandremanPaul2021_QA_reactorScale_lowres`, `31.85s` for `LandremanPaul2021_QH_reactorScale_lowres`, and `5.16s` for `basic_non_stellsym_pressure`,
+- the auto fixed-boundary CLI path now skips redundant accelerated finish retries once the run has already met the total-FSQ target and hands off directly to the strict parity finisher; direct warmed local A/B checks improved from about `2.47s -> 1.22s` on `ITERModel`, `19.08s -> 17.70s` on `LandremanPaul2021_QA_lowres`, `5.42s -> 3.35s` on `basic_non_stellsym_pressure`, and `3.17s -> 2.73s` on `up_down_asymmetric_tokamak`,
+- the benchmark helpers now treat `--solver-mode default` as an alias for the ordinary public auto-policy path, so future benchmark artifacts match `vmec_jax input.name` instead of a distinct explicit controller route,
+- several nearby exact micro-optimizations were measured and rejected because they slowed the representative slice: device-side `ptau` control, batched row enforcement, a dedicated `m=1` scaling helper, a jitted local state-enforcement closure, and batched Z/lambda sine-to-signed update conversion.
+
 Details, profiling guidance, and parity methodology:
 
 - `docs/performance.rst`

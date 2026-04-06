@@ -258,6 +258,76 @@ Current warmed fixed-boundary CPU reassessment against VMEC2000 is recorded in
   rows; the only warmed same-host runtime win in this bundle is currently
   ``circular_tokamak_aspect_100`` at about ``0.93s`` vs ``1.23s``.
 
+2026-04-06 controller and benchmark-tool follow-up
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The next pass after the ``r2`` public bundle separated two different fixed-
+boundary routes that had been getting mixed together:
+
+- the ordinary public auto path (for example ``vmec_jax input.name`` or
+  ``run_fixed_boundary(..., cli_fixed_boundary_mode=True)`` with no explicit
+  ``solver_mode``),
+- and an explicit benchmark path that was still passing ``solver_mode="default"``
+  into ``run_fixed_boundary``.
+
+Driver audit on the ordinary public auto path showed that the representative
+fixed-boundary cases were all landing on the accelerated scan controller and
+then flowing through ``_maybe_finish_cli_fixed_boundary_run``. The important
+kept driver improvement from this pass is:
+
+- once an accelerated fixed-boundary run has already met its total-FSQ target,
+  the CLI finisher now skips any further accelerated retry blocks and hands off
+  directly to the strict parity finisher.
+
+Direct warmed local A/B checks on the representative auto-path cases improved to:
+
+- ``input.ITERModel``: about ``2.47s`` -> ``1.22s``,
+- ``input.LandremanPaul2021_QA_lowres``: about ``19.08s`` -> ``17.70s``,
+- ``input.basic_non_stellsym_pressure``: about ``5.42s`` -> ``3.35s``,
+- ``input.up_down_asymmetric_tokamak``: about ``3.17s`` -> ``2.73s``.
+
+The benchmark-tool fix from the same session was to make the diagnostics
+harnesses treat ``default`` / ``auto`` as aliases for the ordinary public
+auto-policy path instead of passing a distinct explicit controller mode into
+``run_fixed_boundary``. This landed in:
+
+- ``tools/diagnostics/example_runtime_memory_matrix.py``,
+- ``tools/diagnostics/benchmark_accelerated_mode.py``.
+
+These helpers now record both the requested benchmark mode label and the
+effective ``solver_mode`` reported by the run, so future artifacts are
+interpretable even when the public auto-policy resolves to ``accelerated`` or
+``parity`` internally.
+
+Important artifact note:
+
+- older artifacts produced by explicitly passing ``--solver-mode default``
+  before this fix should not be used to judge the ordinary public auto-path
+  controller, because they exercised a different route.
+
+Rejected exact experiments from the same April 6 pass
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Several nearby exact solve-loop and control-path experiments were benchmarked,
+validated, and then rejected because they were not net wins on the
+representative slice or the stable public bundle:
+
+- replacing host-side ``ptau`` control with a device-side jitted scalar
+  reduction path,
+- batching ``_enforce_field_rows`` inside
+  ``_enforce_fixed_boundary_and_axis``,
+- adding a dedicated ``_scale_mode_one`` fast path for the ``m=1``
+  preconditioner scaling block,
+- routing repeated state enforcement through a jitted local closure,
+- batching the symmetric Z/lambda sine-to-signed update conversion through the
+  existing ``_mn_sin_to_signed_physical_batch`` helper.
+
+These experiments were all exact and test-safe, but they either slowed the
+representative slice directly or only looked good in isolated microbenchmarks.
+The practical conclusion is that future optimization passes should prefer
+end-to-end representative benchmarks over local helper microbenchmarks when the
+scan controller and its finish policy are active.
+
 Final-``wout`` accuracy is a separate gate from residual convergence. The
 earlier full fixed-boundary audit is recorded in
 ``outputs/fixed_wout_audit_20260310_r3/summary.json``, and the later staged-3D

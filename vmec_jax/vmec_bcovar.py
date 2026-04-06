@@ -48,7 +48,6 @@ from .vmec_realspace import (
     vmec_realspace_synthesis_multi,
 )
 from .vmec_tomnsp import VmecTrigTables, vmec_trig_tables
-from .vmec_residue import vmec_pwint_from_trig
 from .nyquist import nyquist_basis_from_wout
 
 
@@ -275,6 +274,7 @@ def vmec_bcovar_half_mesh_from_wout(
     freeb_bsqvac_edge: Any | None = None,
     use_vmec_synthesis: bool = False,
     trig: VmecTrigTables | None = None,
+    include_bsub_parity_channels: bool = True,
     return_parity_aux: bool = False,
 ) -> VmecHalfMeshBcovar:
     """Compute VMEC-style half-mesh metric and B components for parity tests.
@@ -737,21 +737,13 @@ def vmec_bcovar_half_mesh_from_wout(
 
     if (ncurr == 1) and lcurrent and (ns >= 2):
         # VMEC's add_fluxes computes chips using bsup in VMEC orientation.
-        pwint = vmec_pwint_from_trig(trig, ns=int(overg.shape[0]), nzeta=int(overg.shape[2])).astype(bsupu.dtype)
-        if pwint.shape[1:] != bsupu.shape[1:]:
-            # The non-VMEC-synthesis path uses the full theta grid instead of
-            # VMEC's reduced ntheta3 grid. Fall back to uniform surface-average
-            # weights on that active grid so the current-driven chips update can
-            # run on the same angular discretization as guu/bsupu/bsupv.
-            dnorm3 = jnp.asarray(getattr(trig, "dnorm3", 0.0), dtype=bsupu.dtype)
-            pwint = jnp.broadcast_to(dnorm3, bsupu.shape)
-            pwint = jnp.concatenate([jnp.zeros_like(pwint[:1]), pwint[1:]], axis=0)
-
-        top = jnp.asarray(icurv, dtype=bsupu.dtype) - jnp.sum(
-            pwint * ((guu * bsupu) + (guv * bsupv)),
-            axis=(1, 2),
-        )
-        bot = jnp.sum(pwint * (overg * guu), axis=(1, 2))
+        w_int = vmec_pwint_from_trig(trig, ns=ns, nzeta=int(overg.shape[2])).astype(bsupu.dtype)
+        weighted_bsup = jnp.sum(((guu * bsupu) + (guv * bsupv)) * w_int, axis=(1, 2))
+        weighted_guu = jnp.sum((overg * guu) * w_int, axis=(1, 2))
+        weighted_bsup = weighted_bsup.at[0].set(jnp.asarray(0.0, dtype=weighted_bsup.dtype))
+        weighted_guu = weighted_guu.at[0].set(jnp.asarray(0.0, dtype=weighted_guu.dtype))
+        top = jnp.asarray(icurv, dtype=bsupu.dtype) - weighted_bsup
+        bot = weighted_guu
 
         chips_dyn = jnp.asarray(chips_eff, dtype=bsupu.dtype)
         safe_bot = jnp.where(bot != 0.0, bot, jnp.asarray(1.0, dtype=bot.dtype))
@@ -806,31 +798,37 @@ def vmec_bcovar_half_mesh_from_wout(
 
     bsubu = guu * bsupu + guv * bsupv
     bsubv = guv * bsupu + gvv * bsupv
-    s_half = pshalf * pshalf
-    bsubu_parity_even = (
-        guu_eh * bsupu_even
-        + s_half * guu_oh * bsupu_odd
-        + guv_eh * bsupv_even
-        + s_half * guv_oh * bsupv_odd
-    )
-    bsubu_parity_odd = (
-        guu_eh * bsupu_odd
-        + guu_oh * bsupu_even
-        + guv_eh * bsupv_odd
-        + guv_oh * bsupv_even
-    )
-    bsubv_parity_even = (
-        guv_eh * bsupu_even
-        + s_half * guv_oh * bsupu_odd
-        + gvv_eh * bsupv_even
-        + s_half * gvv_oh * bsupv_odd
-    )
-    bsubv_parity_odd = (
-        guv_eh * bsupu_odd
-        + guv_oh * bsupu_even
-        + gvv_eh * bsupv_odd
-        + gvv_oh * bsupv_even
-    )
+    if include_bsub_parity_channels:
+        s_half = pshalf * pshalf
+        bsubu_parity_even = (
+            guu_eh * bsupu_even
+            + s_half * guu_oh * bsupu_odd
+            + guv_eh * bsupv_even
+            + s_half * guv_oh * bsupv_odd
+        )
+        bsubu_parity_odd = (
+            guu_eh * bsupu_odd
+            + guu_oh * bsupu_even
+            + guv_eh * bsupv_odd
+            + guv_oh * bsupv_even
+        )
+        bsubv_parity_even = (
+            guv_eh * bsupu_even
+            + s_half * guv_oh * bsupu_odd
+            + gvv_eh * bsupv_even
+            + s_half * gvv_oh * bsupv_odd
+        )
+        bsubv_parity_odd = (
+            guv_eh * bsupu_odd
+            + guv_oh * bsupu_even
+            + gvv_eh * bsupv_odd
+            + gvv_oh * bsupv_even
+        )
+    else:
+        bsubu_parity_even = jnp.zeros_like(bsubu)
+        bsubu_parity_odd = jnp.zeros_like(bsubu)
+        bsubv_parity_even = jnp.zeros_like(bsubv)
+        bsubv_parity_odd = jnp.zeros_like(bsubv)
 
     # Optional reference parity path for lambda-force kernels.
     bsubu_lambda = bsubu
@@ -868,11 +866,11 @@ def vmec_bcovar_half_mesh_from_wout(
     if mass_in is not None and gamma is not None and trig is not None:
         try:
             sqrtg = jnp.asarray(jac.sqrtg)
-            nzeta = int(sqrtg.shape[2])
-            pwint = vmec_pwint_from_trig(trig, ns=int(ns), nzeta=int(nzeta))
+            w_int = vmec_pwint_from_trig(trig, ns=ns, nzeta=int(sqrtg.shape[2])).astype(sqrtg.dtype)
             signgs = int(getattr(wout, "signgs", 1))
             jac_s = jnp.asarray(float(signgs), dtype=sqrtg.dtype) * sqrtg
-            vp = jnp.sum(pwint * jac_s, axis=(1, 2))
+            vp = jnp.sum(jac_s * w_int, axis=(1, 2))
+            vp = vp.at[0].set(jnp.asarray(0.0, dtype=vp.dtype))
             mass_in = jnp.asarray(mass_in, dtype=vp.dtype)
             # Axis value is treated as zero in VMEC (pwint masks js=1).
             safe_vp = jnp.where(vp != 0.0, vp, jnp.asarray(1.0, dtype=vp.dtype))

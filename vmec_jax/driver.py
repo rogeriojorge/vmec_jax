@@ -1468,6 +1468,7 @@ def run_fixed_boundary(
             and str(initial_policy) == "single_grid"
             and (not bool(staged_followup_used))
             and not bool(_result_meets_requested_ftol(best_run.result, ftol=float(requested_ftol)))
+            and not bool(_result_hits_total_target(best_run.result, fsq_total_target=float(target_fsq)))
         ):
             accel_budget_i = int(base_total_budget)
             accel_budget_used = 0
@@ -1481,6 +1482,7 @@ def run_fixed_boundary(
                 )
                 trial_fsq = float(_result_final_fsq(trial.result))
                 trial_conv = bool(_result_meets_requested_ftol(trial.result, ftol=float(requested_ftol)))
+                trial_hits_total = bool(_result_hits_total_target(trial.result, fsq_total_target=float(target_fsq)))
                 attempt_budgets.append(int(accel_budget_i))
                 attempt_fsq.append(float(trial_fsq))
                 attempt_converged.append(bool(trial_conv))
@@ -1490,7 +1492,7 @@ def run_fixed_boundary(
                 if improved:
                     best_run = trial
                     best_fsq = float(trial_fsq)
-                if trial_conv or (not improved):
+                if trial_conv or trial_hits_total or (not improved):
                     break
         if not bool(_result_meets_requested_ftol(best_run.result, ftol=float(requested_ftol))):
             budget_i = int(base_total_budget)
