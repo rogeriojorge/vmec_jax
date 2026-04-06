@@ -237,15 +237,26 @@ Latest serial bundled fixed-boundary reassessment
 The current bundled fixed-boundary benchmark set uses the shipped QA/QH
 reactor-scale reference inputs in place of the retired internal stress cases.
 
-Current warmed fixed-boundary CPU reassessment on the optimized CLI track,
-using the same branch baseline as the comparator, is recorded in
-``outputs/accelerated_cli_fixed_boundary_full_20260311_r2/summary.json``:
+Current warmed fixed-boundary CPU reassessment against VMEC2000 is recorded in
+``outputs/fixed_runtime_accel_cpu_bundle_20260406_r2/summary.json``:
 
-- all 16 bundled fixed-boundary cases converge on both the baseline and
-  optimized paths,
-- the optimized path is now faster on 13 of 16 cases and roughly neutral on
-  the remaining 3,
-- the earlier runtime-regression blocker on the bundled CPU matrix is gone.
+- all 16 bundled fixed-boundary cases converge on the public optimized CLI
+  path and on VMEC2000,
+- the latest kept controller/runtime pass keeps the fast final-grid entry path
+  for staged current-driven 3D inputs, defers the explicit staged replay until
+  it is actually needed, and leaves the earlier host-side ``ptau`` sign-change
+  control in place because the later device-side variant was not a net win on
+  the representative bundle,
+- the targeted staged-current-driven 3D cases improved materially on the same
+  host: ``LandremanPaul2021_QA_lowres`` is now about ``18.22s`` vs
+  ``5.92s`` for VMEC2000, ``LandremanPaul2021_QA_lowres1`` about ``16.74s``
+  vs ``4.25s``, ``LandremanPaul2021_QA_reactorScale_lowres`` about
+  ``23.31s`` vs ``8.84s``, ``LandremanPaul2021_QH_reactorScale_lowres`` about
+  ``31.85s`` vs ``10.48s``, and ``basic_non_stellsym_pressure`` about
+  ``5.16s`` vs ``1.10s``,
+- the public CPU matrix is still slower than VMEC2000 on most fixed-boundary
+  rows; the only warmed same-host runtime win in this bundle is currently
+  ``circular_tokamak_aspect_100`` at about ``0.93s`` vs ``1.23s``.
 
 Final-``wout`` accuracy is a separate gate from residual convergence. The
 earlier full fixed-boundary audit is recorded in
@@ -332,14 +343,13 @@ controller fixes improved several non-axisymmetric cases materially:
   ``38.56s`` optimized), ``LandremanPaul2021_QH_reactorScale_lowres``
   (``60.10s`` vs ``46.33s``), ``ITERModel`` (``12.73s`` vs ``5.00s``), and
   ``cth_like_fixed_bdy`` (``4.71s`` vs ``0.97s``),
-- the README-facing VMEC2000 comparison was then rerun separately on the same
-  host in
-  ``outputs/readme_fixed_runtime_vmec2000_accel_cpu_20260312/summary.json``:
-  all 13 bundled ``lasym=False`` fixed-boundary cases converged, but the
-  optimized branch is still faster than VMEC2000 on only the smallest shipped
-  cases (``solovev`` and ``circular_tokamak_aspect_100``). The reactor-scale
-  QA/QH cases are now close enough to compare honestly on one plot, but they
-  still run somewhat slower than VMEC2000 on CPU,
+- the README-facing VMEC2000 comparison was rerun again on the same host in
+  ``outputs/fixed_runtime_accel_cpu_bundle_20260406_r2/summary.json`` and the
+  plot/table artifacts were regenerated from that summary. All 16 bundled
+  fixed-boundary cases converged. The current reactor-scale QA/QH and staged
+  current-driven 3D rows are materially better than the earlier March public
+  snapshot, but the public CPU comparison still favors VMEC2000 on most of the
+  bundle,
 - carrying the same “reduce host-controlled overhead” approach into
   ``lasym=False`` free-boundary showed the next safe win: batching the
   boundary real-space syntheses in
@@ -407,7 +417,7 @@ free-boundary references. The freshest final-head artifacts are:
 - fixed-boundary optimized CLI / automatic Python readiness matrix:
   ``outputs/readiness_fixed_all_20260313/summary.json``
 - fixed-boundary VMEC2000-vs-optimized warmed runtime matrix:
-  ``outputs/fixed_runtime_vmec2000_accel_cpu_warm_20260313/summary.json``
+  ``outputs/fixed_runtime_accel_cpu_bundle_20260406_r2/summary.json``
 - free-boundary VMEC2000-vs-default warmed runtime matrix:
   ``outputs/free_runtime_vmec2000_cpu_warm_20260313/summary.json``
 
@@ -458,16 +468,17 @@ matrix:
 - ``up_down_asymmetric_tokamak``:
   ``24.58s`` baseline vs ``2.97s`` optimized.
 
-Representative warmed CPU VMEC2000-vs-``vmec_jax`` points from the final
-public runtime matrix:
+Representative warmed CPU fixed-boundary VMEC2000-vs-``vmec_jax`` points from
+the current public runtime matrix:
 
-- ``solovev``: VMEC2000 ``0.61s`` vs ``vmec_jax`` ``0.09s``,
-- ``circular_tokamak_aspect_100``: ``2.99s`` vs ``0.59s``,
-- ``cth_like_fixed_bdy``: ``1.34s`` vs ``1.04s``,
-- ``LandremanPaul2021_QA_reactorScale_lowres``: ``39.27s`` vs ``44.48s``,
-- ``LandremanPaul2021_QH_reactorScale_lowres``: ``46.34s`` vs ``53.93s``,
-- ``DIII-D_lasym_false``: ``19.80s`` vs ``113.78s``,
-- ``cth_like_free_bdy``: ``1.79s`` vs ``6.96s``.
+- ``ITERModel``: VMEC2000 ``0.95s`` vs ``vmec_jax`` ``2.47s``,
+- ``LandremanPaul2021_QA_lowres``: ``5.92s`` vs ``18.22s``,
+- ``LandremanPaul2021_QA_lowres1``: ``4.25s`` vs ``16.74s``,
+- ``LandremanPaul2021_QA_reactorScale_lowres``: ``8.84s`` vs ``23.31s``,
+- ``LandremanPaul2021_QH_reactorScale_lowres``: ``10.48s`` vs ``31.85s``,
+- ``basic_non_stellsym_pressure``: ``1.10s`` vs ``5.16s``,
+- ``circular_tokamak_aspect_100``: ``1.23s`` vs ``0.93s``,
+- ``purely_toroidal_field``: ``1.76s`` vs ``2.34s``.
 
 Same-host CPU/GPU reassessment on a reference GPU workstation is now complete
 for the same 16-case bundled fixed-boundary set:
