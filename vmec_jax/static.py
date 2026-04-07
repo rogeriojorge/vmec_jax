@@ -72,6 +72,7 @@ def build_static(
     grid: AngleGrid | None = None,
     mgrid_metadata: MGridMetadata | None = None,
     free_boundary_extcur: tuple[float, ...] | None = None,
+    cache: bool = True,
 ) -> VMECStatic:
     """Build the VMECStatic container from a parsed config.
 
@@ -108,21 +109,21 @@ def build_static(
             nmax=int(cfg.ntor),
             lasym=bool(cfg.lasym),
             dtype=jnp.asarray(s).dtype,
-            cache=True,
+            cache=bool(cache),
         )
         tomnsps_masks = _tomnsps_masks(
             ns=int(cfg.ns),
             mpol=int(cfg.mpol),
             include_edge=False,
             dtype=jnp.asarray(s).dtype,
-            cache=True,
+            cache=bool(cache),
         )
         tomnsps_masks_edge = _tomnsps_masks(
             ns=int(cfg.ns),
             mpol=int(cfg.mpol),
             include_edge=True,
             dtype=jnp.asarray(s).dtype,
-            cache=True,
+            cache=bool(cache),
         )
         cache_phase = str(os.environ.get("VMEC_JAX_CACHE_VMEC_PHASE", "1")).lower() not in {"0", "false", "no"}
         if cache_phase and trig_vmec is not None:

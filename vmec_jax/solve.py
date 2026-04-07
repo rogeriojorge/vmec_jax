@@ -4138,6 +4138,7 @@ def solve_fixed_boundary_residual_iter(
             grid=grid_vmec,
             mgrid_metadata=getattr(static, "mgrid_metadata", None),
             free_boundary_extcur=getattr(static, "free_boundary_extcur", None),
+            cache=not _tree_has_tracer(state0),
         )
     # Free-boundary control + coupling path:
     # VMEC-style ivac/ivacskip cadence with edge bsqvac coupling.
@@ -5822,6 +5823,10 @@ def solve_fixed_boundary_residual_iter(
         if bool(auto_flip_force):
             raise ValueError("vmec2000 scan does not yet support auto_flip_force=True.")
 
+        traced_scan = _tree_has_tracer(state_init)
+        force_chunked_scan_local = bool(force_chunked_scan) and (not traced_scan)
+        scan_fallback_enabled_local = bool(scan_fallback_enabled) and (not traced_scan)
+
         k_preconditioner_update_interval = 25
         restart_badjac_factor = 0.9
         restart_badprog_factor = 1.03
@@ -5914,7 +5919,7 @@ def solve_fixed_boundary_residual_iter(
             # Avoid host callbacks inside the scan: we'll print per chunk on host.
             chunked_print = True
             print_in_scan = False
-        if force_chunked_scan:
+        if force_chunked_scan_local:
             chunked_print = True
             print_in_scan = False
         if print_in_scan:
@@ -7738,7 +7743,7 @@ def solve_fixed_boundary_residual_iter(
                 )
                 nan_fsq = (~jnp.isfinite(fsq_phys)) | (~jnp.isfinite(fsq1))
                 fallback_active = carry_adv.fallback_active
-                if scan_fallback_enabled and (not bool(scan_core)):
+                if scan_fallback_enabled_local and (not bool(scan_core)):
                     # Track the first N probe steps independent of iter2/iter_offset.
                     probe_active = (carry_adv.probe_count < scan_fallback_iters_j) & fallback_active
                     probe_inc = jnp.where(
@@ -8180,7 +8185,7 @@ def solve_fixed_boundary_residual_iter(
             carry = carry_init
             abort_scan_host = False
             fsq_min_global_j = jnp.asarray(jnp.inf, dtype=dtype)
-            early_fallback = bool(scan_fallback_enabled) and (int(cfg.ns) > int(scan_fallback_iters))
+            early_fallback = bool(scan_fallback_enabled_local) and (int(cfg.ns) > int(scan_fallback_iters))
             need_print = bool(scan_collect_print)
             chunk_size, chunk_cap_remaining = _scan_chunk_settings(
                 max_iter_scan=int(max_iter_scan),
@@ -8236,7 +8241,7 @@ def solve_fixed_boundary_residual_iter(
                     converged_now = False
                 start_idx = int(start_idx + int(chunk_len))
                 if (
-                    scan_fallback_enabled
+                    scan_fallback_enabled_local
                     and int(scan_fallback_iters) > 0
                     and start_idx >= int(scan_fallback_iters)
                     and bool(np.asarray(carry.fallback_active))
@@ -8245,12 +8250,12 @@ def solve_fixed_boundary_residual_iter(
                     carry = carry._replace(fallback_active=jnp.asarray(False))
                 if converged_now:
                     break
-                if scan_fallback_enabled and start_idx >= int(scan_fallback_iters):
+                if scan_fallback_enabled_local and start_idx >= int(scan_fallback_iters):
                     # Defer host sync for fsq_min_global until after the loop.
                     pass
                 if bool(np.asarray(carry.converged)) or bool(np.asarray(carry.abort_scan)):
                     break
-            if scan_fallback_enabled and start_idx >= int(scan_fallback_iters):
+            if scan_fallback_enabled_local and start_idx >= int(scan_fallback_iters):
                 try:
                     fsq_min_global = float(jax.device_get(fsq_min_global_j))
                 except Exception:
@@ -8279,7 +8284,7 @@ def solve_fixed_boundary_residual_iter(
                 except Exception:
                     carry_pre, hist_pre = _scan_step(carry_pre, jnp.asarray(0, dtype=jnp.int32))
                 if (
-                    scan_fallback_enabled
+                    scan_fallback_enabled_local
                     and int(scan_fallback_iters) > 0
                     and int(preflight_iters) >= int(scan_fallback_iters)
                 ):
@@ -8415,7 +8420,7 @@ def solve_fixed_boundary_residual_iter(
             }
             return _attach_freeb_diag(
                 SolveVmecResidualResult(
-                    state=carry_final.state,
+                    state=carry_final.state_checkpoint,
                     n_iter=int(max_iter),
                     w_history=empty,
                     fsqr2_history=empty,
@@ -8661,7 +8666,7 @@ def solve_fixed_boundary_residual_iter(
             "cache_prec_lam_prec": np.asarray(carry_final.cache_prec_lam_prec),
         }
         res_scan = SolveVmecResidualResult(
-            state=carry_final.state,
+            state=carry_final.state_checkpoint,
             n_iter=int(w_hist.shape[0]),
             w_history=np.asarray(w_hist),
             fsqr2_history=np.asarray(fsqr_hist_np),
@@ -8740,7 +8745,7 @@ def solve_fixed_boundary_residual_iter(
     if use_scan:
         if vmec2000_control:
             scan_result = _run_vmec2000_scan(state)
-            if scan_fallback_enabled:
+            if scan_fallback_enabled and (not _tree_has_tracer(state)):
                 try:
                     bad_jac_full = scan_result.diagnostics.get("bad_jacobian_full", None)
                 except Exception:

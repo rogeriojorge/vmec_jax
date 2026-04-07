@@ -1105,6 +1105,8 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
         )
     idx00 = _mode00_index(static.modes)
     signgs_i = int(signgs)
+    scan_forward_env = os.getenv("VMEC_JAX_ENABLE_EXPERIMENTAL_SCAN_FORWARD", "").strip().lower()
+    enable_experimental_scan_forward = scan_forward_env not in ("", "0", "false", "no")
 
     edge_Rcos_use = jnp.asarray(edge_Rcos) if edge_Rcos is not None else jnp.asarray(state0_c.Rcos)[-1, :]
     edge_Rsin_use = jnp.asarray(edge_Rsin) if edge_Rsin is not None else jnp.asarray(state0_c.Rsin)[-1, :]
@@ -1466,7 +1468,7 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
     def _solve(eRcos, eRsin, eZcos, eZsin):
         traced = _is_traced(eRcos, eRsin, eZcos, eZsin)
         forward_mode = str(getattr(implicit, "residual_forward_mode", "auto")).strip().lower()
-        use_scan_forward = forward_mode == "scan"
+        use_scan_forward = (forward_mode == "scan") and bool(enable_experimental_scan_forward)
         if use_scan_forward:
             return _solve_scan(eRcos, eRsin, eZcos, eZsin)
         if traced:

@@ -955,6 +955,12 @@ def initial_guess_from_boundary(
     # axis and boundary (linear in s).
     if indata is not None:
         ax = _read_axis_coeffs(indata)
+        axis_arrays_raw = (
+            ax.get("RAXIS_CC", None),
+            ax.get("RAXIS_CS", None),
+            ax.get("ZAXIS_CC", None),
+            ax.get("ZAXIS_CS", None),
+        )
         raxis_cc = _axis_array(ax.get("RAXIS_CC", None), cfg.ntor, dtype=dtype)
         raxis_cs = _axis_array(ax.get("RAXIS_CS", None), cfg.ntor, dtype=dtype)
         zaxis_cc = _axis_array(ax.get("ZAXIS_CC", None), cfg.ntor, dtype=dtype)
@@ -974,15 +980,10 @@ def initial_guess_from_boundary(
             zaxis_cs = zaxis_cs * axis_scale
 
         # If axis arrays are all zero or missing, fall back to boundary-based axis.
-        have_axis = False
-        if raxis_cc is not None and np.any(np.asarray(raxis_cc) != 0.0):
-            have_axis = True
-        if raxis_cs is not None and np.any(np.asarray(raxis_cs) != 0.0):
-            have_axis = True
-        if zaxis_cc is not None and np.any(np.asarray(zaxis_cc) != 0.0):
-            have_axis = True
-        if zaxis_cs is not None and np.any(np.asarray(zaxis_cs) != 0.0):
-            have_axis = True
+        have_axis = any(
+            arr is not None and np.any(np.asarray(arr) != 0.0)
+            for arr in axis_arrays_raw
+        )
         axis_from_indata = bool(have_axis)
 
         if not have_axis:
