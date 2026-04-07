@@ -5555,6 +5555,8 @@ def solve_fixed_boundary_residual_iter(
     kn_idx = jnp.asarray(kn_idx_np)
     has_kn = jnp.asarray(has_kn_np)
     has_kn_any = bool(np.any(has_kn_np))
+    kn_target_idx = jnp.asarray(np.flatnonzero(has_kn_np), dtype=jnp.int32)
+    kn_source_idx = jnp.asarray(kn_idx_np[has_kn_np], dtype=jnp.int32)
     m0_mask = np.asarray(getattr(static, "m_is_m0", None) if getattr(static, "m_is_m0", None) is not None else (np.asarray(static.modes.m) == 0))
     m0 = jnp.asarray((np.arange(mpol)[:, None] == 0))
     n0 = jnp.asarray((np.arange(nrange)[None, :] == 0))
@@ -5725,8 +5727,8 @@ def solve_fixed_boundary_residual_iter(
         rneg = jnp.zeros_like(rpos)
         zneg = jnp.zeros_like(zpos)
         if has_kn_any:
-            rneg = rneg.at[:, has_kn].set(jnp.asarray(state.Rcos)[:, kn_idx[has_kn]])
-            zneg = zneg.at[:, has_kn].set(jnp.asarray(state.Zsin)[:, kn_idx[has_kn]])
+            rneg = rneg.at[:, kn_target_idx].set(jnp.asarray(state.Rcos)[:, kn_source_idx])
+            zneg = zneg.at[:, kn_target_idx].set(jnp.asarray(state.Zsin)[:, kn_source_idx])
 
         has_kn_mask = has_kn[None, :]
         is_m0 = (m_idx == 0)[None, :]
@@ -5755,8 +5757,8 @@ def solve_fixed_boundary_residual_iter(
             rs_neg = jnp.zeros_like(rs_pos)
             zc_neg = jnp.zeros_like(zc_pos)
             if has_kn_any:
-                rs_neg = rs_neg.at[:, has_kn].set(jnp.asarray(state.Rsin)[:, kn_idx[has_kn]])
-                zc_neg = zc_neg.at[:, has_kn].set(jnp.asarray(state.Zcos)[:, kn_idx[has_kn]])
+                rs_neg = rs_neg.at[:, kn_target_idx].set(jnp.asarray(state.Rsin)[:, kn_source_idx])
+                zc_neg = zc_neg.at[:, kn_target_idx].set(jnp.asarray(state.Zcos)[:, kn_source_idx])
 
             # Internal sin/cos blocks from signed coefficients.
             rsc = jnp.where(has_kn_mask, rs_pos + rs_neg, jnp.where(is_n0, rs_pos, jnp.where(is_m0, 0.0, rs_pos)))
@@ -6405,14 +6407,14 @@ def solve_fixed_boundary_residual_iter(
         from .preconditioner_1d_jax import rz_preconditioner_matrices
 
         cache_lam_prec0 = _lambda_preconditioner(k0.bc)
-        cache_rz_mats0, _jmin0, jmax0 = rz_preconditioner_matrices(
+        cache_rz_mats0, _jmin0, _jmax0 = rz_preconditioner_matrices(
             bc=k0.bc,
             k=k0,
             trig=trig,
             s=s,
             cfg=cfg,
         )
-        jmax0 = int(jmax0)
+        jmax0 = int(jnp.asarray(cache_rz_mats0["ar"]).shape[0])
 
         if resume_state is not None:
             try:

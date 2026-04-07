@@ -147,8 +147,9 @@ def _mode_scale(m: Any, n: Any) -> Any:
 
 def _jxbforce_nyquist_limits_from_trig(trig) -> tuple[int, int]:
     ntheta2 = int(getattr(trig, "ntheta2", 0))
-    cosnv = np.asarray(getattr(trig, "cosnv"))
-    nzeta = int(cosnv.shape[0]) if cosnv.ndim >= 1 else 0
+    cosnv = getattr(trig, "cosnv", None)
+    cosnv_shape = getattr(cosnv, "shape", ()) if cosnv is not None else ()
+    nzeta = int(cosnv_shape[0]) if len(cosnv_shape) >= 1 else 0
     return max(ntheta2 - 1, 0), max(nzeta // 2, 0)
 
 
