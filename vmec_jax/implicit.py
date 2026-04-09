@@ -158,6 +158,55 @@ def _dense_transpose_lstsq_jax(J, b, damping: float):
     return jnp.asarray(lam_arr, dtype=J_arr.dtype)
 
 
+def _dense_lstsq_host(J, b, damping):
+    """Host-side least-norm solve for J x ~= b with optional Tikhonov damping."""
+    J_host = np.asarray(J)
+    b_host = np.asarray(b)
+    damping_host = float(np.asarray(damping))
+    A_host = J_host
+    if damping_host > 0.0:
+        eye = np.eye(int(A_host.shape[1]), dtype=A_host.dtype)
+        A_host = np.concatenate(
+            [A_host, np.sqrt(damping_host) * eye],
+            axis=0,
+        )
+        b_host = np.concatenate(
+            [b_host, np.zeros((int(eye.shape[0]),), dtype=b_host.dtype)],
+            axis=0,
+        )
+    x_host, *_ = np.linalg.lstsq(A_host, b_host, rcond=None)
+    return np.asarray(x_host, dtype=J_host.dtype)
+
+
+def _dense_lstsq_jax(J, b, damping: float):
+    """Device-side least-norm solve for J x ~= b with optional Tikhonov damping."""
+    J_arr = jnp.asarray(J)
+    b_arr = jnp.asarray(b)
+    A_arr = J_arr
+    damping_f = float(damping)
+    if damping_f > 0.0:
+        eye = jnp.eye(int(A_arr.shape[1]), dtype=A_arr.dtype)
+        A_arr = jnp.concatenate(
+            [A_arr, jnp.sqrt(jnp.asarray(damping_f, dtype=A_arr.dtype)) * eye],
+            axis=0,
+        )
+        b_arr = jnp.concatenate(
+            [b_arr, jnp.zeros((int(eye.shape[0]),), dtype=b_arr.dtype)],
+            axis=0,
+        )
+    x_arr, *_ = jnp.linalg.lstsq(A_arr, b_arr, rcond=None)
+    return jnp.asarray(x_arr, dtype=J_arr.dtype)
+
+
+def _weighted_dense_lstsq_jax(J, b, column_weights, damping: float = 0.0):
+    """Least-norm solve for J x ~= b with diagonal weights on x."""
+    J_arr = jnp.asarray(J)
+    weights_arr = jnp.asarray(column_weights, dtype=J_arr.dtype)
+    inv_weights = 1.0 / weights_arr
+    x_scaled = _dense_lstsq_jax(J_arr * inv_weights[None, :], b, damping)
+    return jnp.asarray(inv_weights * x_scaled, dtype=J_arr.dtype)
+
+
 @dataclass(frozen=True)
 class ImplicitLambdaOptions:
     """Controls for the implicit backward pass."""
@@ -506,6 +555,30 @@ def _update_stellsym_reduced_state(
         Lcos=jnp.asarray(state.Lcos),
         Lsin=Lsin,
     )
+
+
+def _reduced_lsin_sc_m1n0_weights(x_active, *, active_lambda_start: int, lam_sc_idx, lam_maps):
+    """Optional branch-selection weights for the reduced Lsin_sc (m=1,n=0) block."""
+    weight_env = os.getenv("VMEC_JAX_REDUCED_LSIN_SC_M1N0_WEIGHT", "").strip()
+    if weight_env == "":
+        return None
+    weight = float(weight_env)
+    if weight <= 0.0:
+        raise ValueError(f"VMEC_JAX_REDUCED_LSIN_SC_M1N0_WEIGHT must be positive, got {weight}")
+
+    per_surface = int(lam_maps.mpol) * int(lam_maps.nrange)
+    lam_sc_idx_arr = jnp.asarray(lam_sc_idx, dtype=jnp.int32)
+    rem = lam_sc_idx_arr % per_surface
+    m_local = rem // int(lam_maps.nrange)
+    n_local = rem % int(lam_maps.nrange)
+    weights = jnp.ones_like(jnp.asarray(x_active))
+    n_sc = int(lam_sc_idx_arr.shape[0])
+    sc_weights = jnp.where(
+        (m_local == 1) & (n_local == 0),
+        jnp.asarray(weight, dtype=weights.dtype),
+        jnp.asarray(1.0, dtype=weights.dtype),
+    )
+    return weights.at[active_lambda_start : active_lambda_start + n_sc].set(sc_weights)
 
 
 def _stellsym_structural_active_keep_indices(*, rz_idx, lam_idx, K: int, idx00: int | None):
@@ -1370,6 +1443,190 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
 
         return _project_state(jax.grad(_objective_from_state)(state))
 
+    resume_v_shape = (int(state0_c.Rcos.shape[0]), int(static.cfg.mpol), int(static.cfg.ntor) + 1)
+
+    def _resume_output_shape():
+        dtype = jnp.asarray(state0_c.Rcos).dtype
+        return {
+            "state_current_flat": jax.ShapeDtypeStruct((int(state0_c.layout.size),), dtype),
+            "state_checkpoint_flat": jax.ShapeDtypeStruct((int(state0_c.layout.size),), dtype),
+            "time_step": jax.ShapeDtypeStruct((), dtype),
+            "inv_tau": jax.ShapeDtypeStruct((10,), dtype),
+            "fsq_prev": jax.ShapeDtypeStruct((), dtype),
+            "fsq0_prev": jax.ShapeDtypeStruct((), dtype),
+            "flip_sign": jax.ShapeDtypeStruct((), dtype),
+            "res0": jax.ShapeDtypeStruct((), dtype),
+            "res1": jax.ShapeDtypeStruct((), dtype),
+            "fsqz_prev": jax.ShapeDtypeStruct((), dtype),
+            "vRcc": jax.ShapeDtypeStruct(resume_v_shape, dtype),
+            "vRss": jax.ShapeDtypeStruct(resume_v_shape, dtype),
+            "vZsc": jax.ShapeDtypeStruct(resume_v_shape, dtype),
+            "vZcs": jax.ShapeDtypeStruct(resume_v_shape, dtype),
+            "vLsc": jax.ShapeDtypeStruct(resume_v_shape, dtype),
+            "vLcs": jax.ShapeDtypeStruct(resume_v_shape, dtype),
+            "vRsc": jax.ShapeDtypeStruct(resume_v_shape, dtype),
+            "vRcs": jax.ShapeDtypeStruct(resume_v_shape, dtype),
+            "vZcc": jax.ShapeDtypeStruct(resume_v_shape, dtype),
+            "vZss": jax.ShapeDtypeStruct(resume_v_shape, dtype),
+            "vLcc": jax.ShapeDtypeStruct(resume_v_shape, dtype),
+            "vLss": jax.ShapeDtypeStruct(resume_v_shape, dtype),
+            "iter1": jax.ShapeDtypeStruct((), jnp.int32),
+            "iter_offset": jax.ShapeDtypeStruct((), jnp.int32),
+            "ijacob": jax.ShapeDtypeStruct((), jnp.int32),
+            "bad_resets": jax.ShapeDtypeStruct((), jnp.int32),
+            "bad_growth_streak": jax.ShapeDtypeStruct((), jnp.int32),
+            "vmec2000_cache_valid": jax.ShapeDtypeStruct((), jnp.bool_),
+            "force_bcovar_update": jax.ShapeDtypeStruct((), jnp.bool_),
+        }
+
+    def _pack_resume_for_output(res):
+        resume = dict(getattr(res, "diagnostics", {}).get("resume_state", {}) or {})
+        state_current = resume.get("state_current", res.state)
+        state_checkpoint = resume.get("state_checkpoint", res.state)
+
+        def _as_v(name):
+            arr = resume.get(name, None)
+            if arr is None:
+                return jnp.zeros(resume_v_shape, dtype=jnp.asarray(state0_c.Rcos).dtype)
+            return jnp.asarray(arr)
+
+        def _as_i(name, default):
+            return jnp.asarray(resume.get(name, default), dtype=jnp.int32)
+
+        def _as_b(name, default):
+            return jnp.asarray(resume.get(name, default), dtype=bool)
+
+        out_dtype = jnp.asarray(state0_c.Rcos).dtype
+        return {
+            "state_current_flat": jnp.asarray(pack_state(state_current), dtype=out_dtype),
+            "state_checkpoint_flat": jnp.asarray(pack_state(state_checkpoint), dtype=out_dtype),
+            "time_step": jnp.asarray(resume.get("time_step", float(step_size)), dtype=out_dtype),
+            "inv_tau": jnp.asarray(resume.get("inv_tau", np.zeros((10,), dtype=np.asarray(state0_host.Rcos).dtype)), dtype=out_dtype),
+            "fsq_prev": jnp.asarray(resume.get("fsq_prev", 0.0), dtype=out_dtype),
+            "fsq0_prev": jnp.asarray(resume.get("fsq0_prev", 0.0), dtype=out_dtype),
+            "flip_sign": jnp.asarray(resume.get("flip_sign", 1.0), dtype=out_dtype),
+            "res0": jnp.asarray(resume.get("res0", -1.0), dtype=out_dtype),
+            "res1": jnp.asarray(resume.get("res1", -1.0), dtype=out_dtype),
+            "fsqz_prev": jnp.asarray(resume.get("fsqz_prev", 1.0), dtype=out_dtype),
+            "vRcc": _as_v("vRcc"),
+            "vRss": _as_v("vRss"),
+            "vZsc": _as_v("vZsc"),
+            "vZcs": _as_v("vZcs"),
+            "vLsc": _as_v("vLsc"),
+            "vLcs": _as_v("vLcs"),
+            "vRsc": _as_v("vRsc"),
+            "vRcs": _as_v("vRcs"),
+            "vZcc": _as_v("vZcc"),
+            "vZss": _as_v("vZss"),
+            "vLcc": _as_v("vLcc"),
+            "vLss": _as_v("vLss"),
+            "iter1": _as_i("iter1", 1),
+            "iter_offset": _as_i("iter_offset", 0),
+            "ijacob": _as_i("ijacob", 0),
+            "bad_resets": _as_i("bad_resets", 0),
+            "bad_growth_streak": _as_i("bad_growth_streak", 0),
+            "vmec2000_cache_valid": _as_b("vmec2000_cache_valid", False),
+            "force_bcovar_update": _as_b("force_bcovar_update", False),
+        }
+
+    def _resume_float_fields(resume_out):
+        return {
+            "state_current_flat": jnp.asarray(resume_out["state_current_flat"]),
+            "state_checkpoint_flat": jnp.asarray(resume_out["state_checkpoint_flat"]),
+            "time_step": jnp.asarray(resume_out["time_step"]),
+            "inv_tau": jnp.asarray(resume_out["inv_tau"]),
+            "fsq_prev": jnp.asarray(resume_out["fsq_prev"]),
+            "fsq0_prev": jnp.asarray(resume_out["fsq0_prev"]),
+            "flip_sign": jnp.asarray(resume_out["flip_sign"]),
+            "res0": jnp.asarray(resume_out["res0"]),
+            "res1": jnp.asarray(resume_out["res1"]),
+            "fsqz_prev": jnp.asarray(resume_out["fsqz_prev"]),
+            "vRcc": jnp.asarray(resume_out["vRcc"]),
+            "vRss": jnp.asarray(resume_out["vRss"]),
+            "vZsc": jnp.asarray(resume_out["vZsc"]),
+            "vZcs": jnp.asarray(resume_out["vZcs"]),
+            "vLsc": jnp.asarray(resume_out["vLsc"]),
+            "vLcs": jnp.asarray(resume_out["vLcs"]),
+            "vRsc": jnp.asarray(resume_out["vRsc"]),
+            "vRcs": jnp.asarray(resume_out["vRcs"]),
+            "vZcc": jnp.asarray(resume_out["vZcc"]),
+            "vZss": jnp.asarray(resume_out["vZss"]),
+            "vLcc": jnp.asarray(resume_out["vLcc"]),
+            "vLss": jnp.asarray(resume_out["vLss"]),
+        }
+
+    def _resume_const_fields(resume_out):
+        return {
+            "iter1": jnp.asarray(resume_out["iter1"], dtype=jnp.int32),
+            "iter_offset": jnp.asarray(resume_out["iter_offset"], dtype=jnp.int32),
+            "ijacob": jnp.asarray(resume_out["ijacob"], dtype=jnp.int32),
+            "bad_resets": jnp.asarray(resume_out["bad_resets"], dtype=jnp.int32),
+            "bad_growth_streak": jnp.asarray(resume_out["bad_growth_streak"], dtype=jnp.int32),
+            "vmec2000_cache_valid": jnp.asarray(resume_out["vmec2000_cache_valid"], dtype=bool),
+            "force_bcovar_update": jnp.asarray(resume_out["force_bcovar_update"], dtype=bool),
+        }
+
+    def _resume_state_one_step(resume_float, resume_const, eRcos, eRsin, eZcos, eZsin):
+        state_current = _enforce_state(unpack_state(jnp.asarray(resume_float["state_current_flat"]), state0_c.layout), eRcos, eRsin, eZcos, eZsin)
+        state_checkpoint = _enforce_state(
+            unpack_state(jnp.asarray(resume_float["state_checkpoint_flat"]), state0_c.layout),
+            eRcos,
+            eRsin,
+            eZcos,
+            eZsin,
+        )
+        resume_state = {
+            "time_step": jnp.asarray(resume_float["time_step"]),
+            "inv_tau": jnp.asarray(resume_float["inv_tau"]),
+            "fsq_prev": jnp.asarray(resume_float["fsq_prev"]),
+            "fsq0_prev": jnp.asarray(resume_float["fsq0_prev"]),
+            "flip_sign": jnp.asarray(resume_float["flip_sign"]),
+            "iter1": jnp.asarray(resume_const["iter1"], dtype=jnp.int32),
+            "iter_offset": jnp.asarray(resume_const["iter_offset"], dtype=jnp.int32),
+            "res0": jnp.asarray(resume_float["res0"]),
+            "res1": jnp.asarray(resume_float["res1"]),
+            "ijacob": jnp.asarray(resume_const["ijacob"], dtype=jnp.int32),
+            "bad_resets": jnp.asarray(resume_const["bad_resets"], dtype=jnp.int32),
+            "bad_growth_streak": jnp.asarray(resume_const["bad_growth_streak"], dtype=jnp.int32),
+            "fsqz_prev": jnp.asarray(resume_float["fsqz_prev"]),
+            "state_checkpoint": state_checkpoint,
+            "vRcc": jnp.asarray(resume_float["vRcc"]),
+            "vRss": jnp.asarray(resume_float["vRss"]),
+            "vZsc": jnp.asarray(resume_float["vZsc"]),
+            "vZcs": jnp.asarray(resume_float["vZcs"]),
+            "vLsc": jnp.asarray(resume_float["vLsc"]),
+            "vLcs": jnp.asarray(resume_float["vLcs"]),
+            "vRsc": jnp.asarray(resume_float["vRsc"]),
+            "vRcs": jnp.asarray(resume_float["vRcs"]),
+            "vZcc": jnp.asarray(resume_float["vZcc"]),
+            "vZss": jnp.asarray(resume_float["vZss"]),
+            "vLcc": jnp.asarray(resume_float["vLcc"]),
+            "vLss": jnp.asarray(resume_float["vLss"]),
+            "vmec2000_cache_valid": jnp.asarray(resume_const["vmec2000_cache_valid"], dtype=bool),
+            "force_bcovar_update": jnp.asarray(resume_const["force_bcovar_update"], dtype=bool),
+        }
+        res = solve_fixed_boundary_residual_iter(
+            state_current,
+            static,
+            indata=indata,
+            signgs=signgs_i,
+            ftol=ftol,
+            max_iter=1,
+            step_size=float(step_size),
+            vmec2000_control=True,
+            reference_mode=False,
+            backtracking=False,
+            limit_dt_from_force=False,
+            limit_update_rms=False,
+            verbose=False,
+            verbose_vmec2000_table=False,
+            jit_forces="auto",
+            use_scan=True,
+            resume_state=resume_state,
+            resume_state_mode="minimal",
+        )
+        return _resume_float_fields(_pack_resume_for_output(res))
+
     def _solve_host(eRcos, eRsin, eZcos, eZsin):
         eRcos_np = np.asarray(eRcos)
         eRsin_np = np.asarray(eRsin)
@@ -1409,9 +1666,14 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
             step_size=float(step_size),
             vmec2000_control=True,
             reference_mode=False,
-            backtracking=True,
-            limit_dt_from_force=True,
-            limit_update_rms=True,
+            # Keep the callback/host primal path on the same strict VMEC2000
+            # branch as the differentiable scan path. The extra backtracking and
+            # update limiters leave the host solve materially off the residual
+            # fixed point on the QH workload, which then corrupts the implicit
+            # derivatives even when the local linearization is correct.
+            backtracking=False,
+            limit_dt_from_force=False,
+            limit_update_rms=False,
             verbose=False,
             verbose_vmec2000_table=False,
             jit_forces="auto",
@@ -1419,7 +1681,7 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
         )
         fsqz_hist = np.asarray(getattr(res, "fsqz2_history", []), dtype=float)
         zero_m1 = 1.0 if (int(getattr(res, "n_iter", 0)) < 2 or (fsqz_hist.size > 0 and float(fsqz_hist[-1]) < 1.0e-6)) else 0.0
-        return np.asarray(pack_state(res.state)), np.asarray(zero_m1, dtype=state0_host.Rcos.dtype)
+        return np.asarray(pack_state(res.state)), np.asarray(zero_m1, dtype=state0_host.Rcos.dtype), _pack_resume_for_output(res)
 
     def _solve_scan(eRcos, eRsin, eZcos, eZsin):
         boundary = BoundaryCoeffs(
@@ -1460,7 +1722,7 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
             jnp.asarray(1.0, dtype=jnp.asarray(state0_c.Rcos).dtype),
             jnp.asarray(0.0, dtype=jnp.asarray(state0_c.Rcos).dtype),
         )
-        return res.state, zero_m1
+        return res.state, zero_m1, _pack_resume_for_output(res)
 
     def _is_traced(*xs):
         return any(isinstance(x, jax.core.Tracer) for x in xs)
@@ -1475,14 +1737,15 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
             out_shape = (
                 jax.ShapeDtypeStruct((int(state0_c.layout.size),), jnp.asarray(state0_c.Rcos).dtype),
                 jax.ShapeDtypeStruct((), jnp.asarray(state0_c.Rcos).dtype),
+                _resume_output_shape(),
             )
-            x_flat, zero_m1 = jax.pure_callback(_solve_host, out_shape, eRcos, eRsin, eZcos, eZsin)
-            return unpack_state(x_flat, state0_c.layout), zero_m1
-        x_flat, zero_m1 = _solve_host(eRcos, eRsin, eZcos, eZsin)
-        return unpack_state(jnp.asarray(x_flat), state0_c.layout), jnp.asarray(zero_m1)
+            x_flat, zero_m1, resume_out = jax.pure_callback(_solve_host, out_shape, eRcos, eRsin, eZcos, eZsin)
+            return unpack_state(x_flat, state0_c.layout), zero_m1, resume_out
+        x_flat, zero_m1, resume_out = _solve_host(eRcos, eRsin, eZcos, eZsin)
+        return unpack_state(jnp.asarray(x_flat), state0_c.layout), jnp.asarray(zero_m1), resume_out
 
     if not _is_traced(edge_Rcos_use, edge_Rsin_use, edge_Zcos_use, edge_Zsin_use):
-        x_flat, _zero_m1 = _solve_host(edge_Rcos_use, edge_Rsin_use, edge_Zcos_use, edge_Zsin_use)
+        x_flat, _zero_m1, _resume_out = _solve_host(edge_Rcos_use, edge_Rsin_use, edge_Zcos_use, edge_Zsin_use)
         return unpack_state(jnp.asarray(x_flat), state0_c.layout)
 
     residual_tangent_mode = str(getattr(implicit, "residual_tangent_mode", "opaque")).strip().lower()
@@ -1490,6 +1753,7 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
     def _state_tangent_from_boundary_tangent(
         st_star,
         zero_m1_star,
+        resume_star,
         eRcos_star,
         eRsin_star,
         eZcos_star,
@@ -1505,6 +1769,70 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
             )
 
         tangent_mode = str(getattr(implicit, "residual_tangent_mode", "auto")).strip().lower()
+        solver_map_env = os.getenv("VMEC_JAX_USE_SOLVER_MAP_TANGENT", "0").strip().lower()
+        use_solver_map_tangent = solver_map_env not in ("", "0", "false", "no")
+        solver_map_reference_state = None
+        if use_solver_map_tangent:
+            from jax.flatten_util import ravel_pytree
+            from jax.scipy.sparse.linalg import bicgstab
+
+            solver_map_steps_env = os.getenv("VMEC_JAX_SOLVER_MAP_STEPS", "").strip()
+            solver_map_steps = max(1, int(solver_map_steps_env)) if solver_map_steps_env else 1
+
+            resume_float_star = _resume_float_fields(resume_star)
+            resume_const_star = _resume_const_fields(resume_star)
+
+            def _resume_state_map(y_float):
+                y_out = y_float
+                for _ in range(int(solver_map_steps)):
+                    y_out = _resume_state_one_step(
+                        y_out,
+                        resume_const_star,
+                        eRcos_star,
+                        eRsin_star,
+                        eZcos_star,
+                        eZsin_star,
+                    )
+                return y_out
+
+            _, resume_jvp = jax.linearize(_resume_state_map, resume_float_star)
+            rhs_resume = jax.jvp(
+                lambda a, b, c, d: _resume_state_one_step(resume_float_star, resume_const_star, a, b, c, d),
+                (eRcos_star, eRsin_star, eZcos_star, eZsin_star),
+                (deRcos, deRsin, deZcos, deZsin),
+            )[1]
+
+            rhs_flat, unravel_resume = ravel_pytree(rhs_resume)
+
+            def _resume_linear_op(v_flat):
+                v_tree = unravel_resume(v_flat)
+                gv_tree = resume_jvp(v_tree)
+                gv_flat, _ = ravel_pytree(gv_tree)
+                return v_flat - gv_flat
+
+            def _resume_linear_solve(matvec, b_flat):
+                sol_flat, info = bicgstab(
+                    matvec,
+                    b_flat,
+                    tol=float(implicit.cg_tol),
+                    atol=0.0,
+                    maxiter=max(10, int(getattr(implicit, "cg_max_iter", 200))),
+                )
+                return jnp.where(jnp.isfinite(sol_flat), sol_flat, jnp.zeros_like(sol_flat))
+
+            dy_flat = jax.lax.custom_linear_solve(
+                _resume_linear_op,
+                rhs_flat,
+                solve=_resume_linear_solve,
+                transpose_solve=_resume_linear_solve,
+                symmetric=False,
+            )
+            dy_resume = unravel_resume(dy_flat)
+            solver_map_reference_state = unpack_state(
+                jnp.asarray(dy_resume["state_current_flat"]),
+                state0_c.layout,
+            )
+
         rz_idx_np, lam_idx_np, ns_active, K_active = _stellsym_feasible_indices_np(
             static,
             idx00=idx00,
@@ -1561,6 +1889,8 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
                 idx00=idx00,
                 mask_lambda_axis=True,
             )
+            active_lambda_start = int(rz_idx.shape[0]) + int(z_idx.shape[0])
+            active_cs_start = active_lambda_start + int(lam_sc_idx.shape[0])
             x_active_star = _pack_stellsym_reduced_state(
                 st_active_ref,
                 rz_idx=rz_idx,
@@ -1621,6 +1951,7 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
         stationarity_vjp_active = jax.linear_transpose(stationarity_jvp_active, x_active_star)
         damping = jnp.asarray(float(implicit.damping), dtype=jnp.asarray(x_active_star).dtype)
         active_is_square = tuple(stationarity_star_active.shape) == tuple(x_active_star.shape)
+        use_explicit_reduced_tangent = not _vmec_keep_all_active_enabled()
 
         def stationarity_jvp_active_damped(u_active):
             return stationarity_jvp_active(u_active) + damping * u_active
@@ -1631,9 +1962,130 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
             (deRcos, deRsin, deZcos, deZsin),
         )[1]
         rhs = jnp.asarray(boundary_tangent)
+        dx_reference_active = None
+        reference_keep_idx = None
+        active_weights = None
+        if solver_map_reference_state is not None:
+            if _vmec_keep_all_active_enabled():
+                dx_reference_active_full = -_pack_stellsym_feasible_state(
+                    solver_map_reference_state,
+                    rz_idx=rz_idx,
+                    lam_idx=lam_idx,
+                )
+                dx_reference_active = jnp.take(dx_reference_active_full, active_keep_idx)
+            else:
+                dx_reference_active = -_pack_stellsym_reduced_state(
+                    solver_map_reference_state,
+                    rz_idx=rz_idx,
+                    z_idx=z_idx,
+                    lam_sc_idx=lam_sc_idx,
+                    lam_cs_idx=lam_cs_idx,
+                    lam_maps=lam_maps,
+                )
+                reference_mode = os.getenv("VMEC_JAX_SOLVER_MAP_REFERENCE_MODE", "full").strip().lower()
+                if reference_mode == "lambda-only":
+                    dx_reference_active = dx_reference_active.at[:active_lambda_start].set(
+                        jnp.zeros((active_lambda_start,), dtype=dx_reference_active.dtype)
+                    )
+                elif reference_mode == "lambda-cs-m0-lock":
+                    lam_cs_idx_np = np.asarray(lam_cs_idx, dtype=np.int32)
+                    nrange = int(lam_maps.nrange)
+                    mpol = int(lam_maps.mpol)
+                    flat_per_surface = mpol * nrange
+                    rem = lam_cs_idx_np % flat_per_surface
+                    m_local = rem // nrange
+                    n_local = rem % nrange
+                    keep_local = np.flatnonzero((m_local == 0) & (n_local > 0))
+                    reference_keep_idx = jnp.asarray(active_cs_start + keep_local, dtype=jnp.int32)
+                    keep_mask = np.zeros((int(dx_reference_active.shape[0]),), dtype=bool)
+                    keep_mask[np.asarray(reference_keep_idx, dtype=np.int32)] = True
+                    dx_reference_active = jnp.where(
+                        jnp.asarray(keep_mask),
+                        dx_reference_active,
+                        jnp.zeros_like(dx_reference_active),
+                    )
+        if use_explicit_reduced_tangent:
+            active_weights = _reduced_lsin_sc_m1n0_weights(
+                x_active_star,
+                active_lambda_start=active_lambda_start,
+                lam_sc_idx=lam_sc_idx,
+                lam_maps=lam_maps,
+            )
 
         dx_active = None
-        if active_is_square and tangent_mode in ("auto", "lineax"):
+        if use_explicit_reduced_tangent:
+            chunk_size = getattr(implicit, "jac_chunk_size", None)
+            if chunk_size is None:
+                chunk_size = _vmec_jac_chunk_size_override()
+            if chunk_size is None:
+                chunk_size = _default_vmec_jac_chunk_size(int(x_active_star.shape[0]))
+            J_active = _linear_map_jacobian_columns(
+                stationarity_jvp_active,
+                input_size=int(x_active_star.shape[0]),
+                output_size=int(np.prod(np.shape(stationarity_star_active))),
+                dtype=jnp.asarray(x_active_star).dtype,
+                chunk_size=int(chunk_size),
+            )
+            # The reduced stellarator-symmetric system is nearly singular on the
+            # QH workload. A least-norm solve matches the primal solver branch
+            # far better than a plain inverse or normal-equation solve.
+            if dx_reference_active is not None:
+                if reference_keep_idx is not None and int(reference_keep_idx.shape[0]) > 0:
+                    fixed_vals = jnp.take(dx_reference_active, reference_keep_idx)
+                    all_idx = np.arange(int(dx_reference_active.shape[0]), dtype=np.int32)
+                    free_mask = np.ones((int(dx_reference_active.shape[0]),), dtype=bool)
+                    free_mask[np.asarray(reference_keep_idx, dtype=np.int32)] = False
+                    free_idx = jnp.asarray(all_idx[free_mask], dtype=jnp.int32)
+                    rhs_correction = rhs - jnp.take(J_active, reference_keep_idx, axis=1) @ fixed_vals
+                    dx_active = jnp.zeros_like(dx_reference_active)
+                    dx_active = dx_active.at[reference_keep_idx].set(
+                        fixed_vals,
+                        indices_are_sorted=True,
+                        unique_indices=True,
+                    )
+                    if int(free_idx.shape[0]) > 0:
+                        free_weights = None if active_weights is None else jnp.take(active_weights, free_idx)
+                        if free_weights is not None:
+                            free_sol = _weighted_dense_lstsq_jax(
+                                jnp.take(J_active, free_idx, axis=1),
+                                rhs_correction,
+                                free_weights,
+                                0.0,
+                            )
+                        else:
+                            free_sol = _dense_lstsq_jax(jnp.take(J_active, free_idx, axis=1), rhs_correction, 0.0)
+                        dx_active = dx_active.at[free_idx].set(
+                            free_sol,
+                            indices_are_sorted=True,
+                            unique_indices=True,
+                        )
+                else:
+                    lambda_weight_env = os.getenv("VMEC_JAX_SOLVER_MAP_LAMBDA_WEIGHT", "").strip()
+                    lambda_weight = float(lambda_weight_env) if lambda_weight_env else 1.0
+                    rhs_correction = rhs - J_active @ dx_reference_active
+                    correction_weights = active_weights
+                    if lambda_weight > 1.0 and (not _vmec_keep_all_active_enabled()):
+                        if correction_weights is None:
+                            correction_weights = jnp.ones_like(dx_reference_active)
+                        correction_weights = correction_weights.at[active_lambda_start:].set(
+                            correction_weights[active_lambda_start:]
+                            * jnp.asarray(lambda_weight, dtype=correction_weights.dtype)
+                        )
+                    if correction_weights is not None:
+                        dx_active = dx_reference_active + _weighted_dense_lstsq_jax(
+                            J_active,
+                            rhs_correction,
+                            correction_weights,
+                            0.0,
+                        )
+                    else:
+                        dx_active = dx_reference_active + _dense_lstsq_jax(J_active, rhs_correction, 0.0)
+            else:
+                if active_weights is not None:
+                    dx_active = _weighted_dense_lstsq_jax(J_active, rhs, active_weights, 0.0)
+                else:
+                    dx_active = _dense_lstsq_jax(J_active, rhs, 0.0)
+        if dx_active is None and active_is_square and tangent_mode in ("auto", "lineax"):
             dx_lineax, success, _stats = _lineax_bicgstab_solve(
                 stationarity_jvp_active_damped,
                 rhs,
@@ -1739,10 +2191,11 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
         def _solve_cust_jvp_rule(primals, tangents):
             eRcos, eRsin, eZcos, eZsin = primals
             deRcos, deRsin, deZcos, deZsin = tangents
-            st, zero_m1 = _solve(eRcos, eRsin, eZcos, eZsin)
+            st, zero_m1, resume_out = _solve(eRcos, eRsin, eZcos, eZsin)
             tangent_state = _state_tangent_from_boundary_tangent(
                 st,
                 zero_m1,
+                resume_out,
                 eRcos,
                 eRsin,
                 eZcos,
@@ -1766,7 +2219,7 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
         return _solve(eRcos, eRsin, eZcos, eZsin)[0]
 
     def fwd(eRcos, eRsin, eZcos, eZsin):
-        st, zero_m1 = _solve(eRcos, eRsin, eZcos, eZsin)
+        st, zero_m1, _resume_out = _solve(eRcos, eRsin, eZcos, eZsin)
         return st, (
             _stop_gradient_tree(st),
             jnp.asarray(zero_m1),
@@ -2014,7 +2467,8 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
                     jac_shape=tuple(int(x) for x in J_active.shape),
                 )
                 solve_start = time.perf_counter()
-                damping = jnp.asarray(float(implicit.damping), dtype=J_active.dtype)
+                effective_damping = 0.0
+                damping = jnp.asarray(float(effective_damping), dtype=J_active.dtype)
                 if residual_adjoint_mode == "dense":
                     if _is_traced(J_active, b_active, damping):
                         out_shape = jax.ShapeDtypeStruct((int(J_active.shape[0]),), J_active.dtype)
@@ -2032,13 +2486,14 @@ def solve_fixed_boundary_state_implicit_vmec_residual(
                         )
                 else:
                     # Keep the explicit chunked Jacobian path, but solve the
-                    # same damped transpose least-squares problem as the dense
-                    # reference instead of squaring the condition number via
-                    # normal equations.
+                    # same transpose least-squares problem as the dense
+                    # reference. On the reduced stellarator-symmetric branch,
+                    # additional Tikhonov damping biases the nullspace choice
+                    # away from the primal solver branch, so keep it at zero.
                     lam = _dense_transpose_lstsq_jax(
                         J_active,
                         b_active,
-                        float(implicit.damping),
+                        effective_damping,
                     )
                 _vmec_backward_profile_log("active_dense_solve_done", solve_start)
                 result = _boundary_param_vjp_active(lam)

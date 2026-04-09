@@ -8389,6 +8389,7 @@ def solve_fixed_boundary_residual_iter(
             hist_dtype = jnp.asarray(state0.Rcos).dtype
             empty = jnp.zeros((0,), dtype=hist_dtype)
             traced_resume_state = {
+                "state_current": carry_final.state,
                 "time_step": carry_final.time_step,
                 "inv_tau": carry_final.inv_tau,
                 "fsq_prev": carry_final.fsq_prev,
@@ -8642,6 +8643,7 @@ def solve_fixed_boundary_residual_iter(
             "freeb_nvskip0": int(freeb_nvskip0),
         }
         resume_state_scan_heavy = {
+            "state_current": carry_final.state,
             "state_checkpoint": carry_final.state_checkpoint,
             "vRcc": np.asarray(carry_final.vRcc),
             "vRss": np.asarray(carry_final.vRss),
@@ -12508,8 +12510,10 @@ def solve_fixed_boundary_residual_iter(
         "res1": float(res1),
         "prev_rz_fsq": float(prev_rz_fsq),
         "bad_growth_streak": int(bad_growth_streak),
+        "fsqz_prev": float(fsqz_prev),
         "huge_force_restart_count": int(huge_force_restart_count),
         "vmec2000_cache_valid": bool(vmec2000_cache_valid),
+        "force_bcovar_update": bool(force_bcovar_update),
         "freeb_ivac": int(freeb_ivac),
         "freeb_ivacskip": int(freeb_ivacskip),
         "freeb_nvacskip": int(freeb_nvacskip),
@@ -12523,6 +12527,7 @@ def solve_fixed_boundary_residual_iter(
         ),
     }
     resume_state_heavy = {
+        "state_current": state,
         "vRcc": np.asarray(vRcc),
         "vRss": np.asarray(vRss),
         "vZsc": np.asarray(vZsc),
